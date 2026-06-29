@@ -1,2 +1,2 @@
-greengrass-commons
+greengrass-commons @ git+https://github.com/edgecommons/ggcommons.git@python-lib/v0.1.1#subdirectory=libs/python
 pymodbus>=3.6
