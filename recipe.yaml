@@ -79,8 +79,10 @@ Manifests:
           python3 -m venv "$COMPONENT_DIR/venv"
           . $COMPONENT_DIR/venv/bin/activate
           pip3 install --upgrade pip
-          pip3 install -r {artifacts:decompressedPath}/ModbusAdapter/requirements.txt
+          # Install the bundled ggcommons wheel first (it is not on public PyPI), then the rest;
+          # greengrass-commons in requirements.txt is then already satisfied and skipped.
           pip3 install {artifacts:decompressedPath}/ModbusAdapter/greengrass_commons-*.whl
+          pip3 install -r {artifacts:decompressedPath}/ModbusAdapter/requirements.txt
           deactivate
       Run:
         Script: |-
