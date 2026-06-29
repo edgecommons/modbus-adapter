@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gg-modbus-adapter"
+version = "1.0.0"
+description = "GGCommons Modbus southbound adapter — the Python reference protocol adapter"
+requires-python = ">=3.9"
+dependencies = [
+    "greengrass-commons",
+    "pymodbus>=3.6",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7", "pytest-cov", "paho-mqtt>=2.0"]
+
+[tool.setuptools]
+packages = ["modbus_adapter", "modbus_adapter.config"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"

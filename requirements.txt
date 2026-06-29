@@ -1,0 +1,2 @@
+greengrass-commons
+pymodbus>=3.6

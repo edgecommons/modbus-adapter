@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+# validation configs that may carry inline credentials / env specifics
+validation/*-user.json
+# Paho MQTT default file-persistence dirs (created when running from a repo dir)
+*-tcplocalhost*/
+*-ssllocalhost*/
