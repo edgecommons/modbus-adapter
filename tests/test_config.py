@@ -1,0 +1,121 @@
+"""Unit tests for config parsing, defaults precedence, and topic resolution."""
+import pytest
+
+from modbus_adapter.config.connection_info import ConnectionInfo
+from modbus_adapter.config.deadband_spec import DeadbandSpec
+from modbus_adapter.config.server_configuration import ServerConfiguration
+from modbus_adapter.config.tag_spec import TagSpec
+
+
+class FakeCM:
+    """Minimal ConfigManager stand-in: resolves the lib-level template tokens + custom tags."""
+
+    def __init__(self, instances, component="ModbusAdapter"):
+        self._instances = {i["id"]: i for i in instances}
+        self._component = component
+
+    def get_instance_config(self, iid):
+        return self._instances.get(iid, {})
+
+    def resolve_template(self, t):
+        return (t.replace("{ComponentFullName}", "com.mbreissi.modbus." + self._component)
+                 .replace("{ComponentName}", self._component)
+                 .replace("{ThingName}", "thing1")
+                 .replace("{site}", "site1"))
+
+
+# --- TagSpec ---------------------------------------------------------------------------------
+def test_tagspec_valid_and_helpers():
+    t = TagSpec.from_dict({"name": "Temp", "table": "holding", "address": 4, "type": "float32",
+                           "scale": 0.1, "wordOrder": "little"})
+    assert t.unit_length() == 2
+    assert t.tag_id(2) == "u2/holding/4/float32"
+    assert t.address_dict(2) == {"unitId": 2, "table": "holding", "address": 4, "type": "float32",
+                                 "wordOrder": "little", "byteOrder": "big"}
+
+
+def test_tagspec_coil_and_bit_lengths():
+    coil = TagSpec.from_dict({"name": "Run", "table": "coil", "address": 0})
+    assert coil.type == "bool" and coil.unit_length() == 1
+    bittag = TagSpec.from_dict({"name": "Alarm", "table": "holding", "address": 10, "type": "bool", "bit": 3})
+    assert bittag.unit_length() == 1
+    assert bittag.address_dict(1)["bit"] == 3
+    strtag = TagSpec.from_dict({"name": "Label", "table": "holding", "address": 20, "type": "string", "count": 5})
+    assert strtag.unit_length() == 5
+
+
+@pytest.mark.parametrize("bad", [
+    {"table": "holding", "address": 0},                                   # no name
+    {"name": "x", "table": "bogus", "address": 0},                        # bad table
+    {"name": "x", "table": "holding"},                                    # no address
+    {"name": "x", "table": "holding", "address": 0, "type": "string"},    # string needs count
+    {"name": "x", "table": "coil", "address": 0, "type": "int16"},        # coil must be bool
+    {"name": "x", "table": "coil", "address": 0, "bit": 1},               # bit only on register bool
+    {"name": "x", "table": "holding", "address": 0, "type": "int16", "bit": 1},  # bit needs bool
+])
+def test_tagspec_validation_errors(bad):
+    with pytest.raises(ValueError):
+        TagSpec.from_dict(bad)
+
+
+# --- DeadbandSpec ----------------------------------------------------------------------------
+def test_deadband():
+    assert DeadbandSpec().exceeds(None, 5) is True            # first value always publishes
+    assert DeadbandSpec("none").exceeds(5, 5) is False
+    assert DeadbandSpec("none").exceeds(5, 6) is True
+    ab = DeadbandSpec("absolute", 0.5)
+    assert ab.exceeds(10.0, 10.4) is False
+    assert ab.exceeds(10.0, 10.6) is True
+    pc = DeadbandSpec("percent", 10)
+    assert pc.exceeds(100.0, 105.0) is False
+    assert pc.exceeds(100.0, 111.0) is True
+    assert pc.exceeds(0.0, 1.0) is True                       # base 0 -> any change
+    assert DeadbandSpec("absolute", 1).exceeds("a", "b") is True  # non-numeric -> any change
+
+
+# --- ConnectionInfo --------------------------------------------------------------------------
+def test_connection_defaults_and_transports():
+    c = ConnectionInfo({})
+    assert c.transport == "tcp" and c.host == "127.0.0.1" and c.port == 502 and c.unit_id == 1
+    assert c.timeout_s == 1.0
+    rtu = ConnectionInfo({"transport": "rtu", "serialPort": "COM3", "baudRate": 19200, "unitId": 7})
+    assert rtu.transport == "rtu" and rtu.serial_port == "COM3" and rtu.baud_rate == 19200 and rtu.unit_id == 7
+    assert ConnectionInfo({"transport": "rtutcp", "host": "h", "port": 5020}).port == 5020
+    with pytest.raises(ValueError):
+        ConnectionInfo({"transport": "bogus"})
+
+
+# --- ServerConfiguration ---------------------------------------------------------------------
+def test_server_configuration_precedence_and_topics():
+    inst = {
+        "id": "plc1",
+        "connection": {"transport": "tcp", "host": "10.0.0.5", "port": 1502, "unitId": 3},
+        "defaults": {"pollIntervalMs": 250},
+        "publish": {"topic": "southbound/{site}/{ComponentName}/{InstanceId}/{tagId}", "batchMs": 100},
+        "write": {"enabled": True},
+        "pollGroups": [{
+            "id": "g1", "pollIntervalMs": 500,
+            "tags": [{"name": "Temp", "table": "holding", "address": 0, "type": "float32", "scale": 0.1}],
+        }],
+    }
+    glob = {"defaults": {"pollIntervalMs": 1000, "maxGap": 4, "publishMode": "always"}}
+    sc = ServerConfiguration(FakeCM([inst]), glob, "plc1")
+
+    assert sc.connection.host == "10.0.0.5" and sc.connection.unit_id == 3
+    assert sc.poll_interval_ms == 250        # instance overrides global
+    assert sc.max_gap == 4                    # falls back to global
+    assert sc.publish_mode == "always"        # falls back to global
+    assert sc.batch_ms == 100
+    assert sc.write_enabled is True
+    assert sc.write_topic == "southbound/ModbusAdapter/plc1/write"
+    assert sc.read_topic == "southbound/ModbusAdapter/plc1/read"
+    assert sc.control_topic == "southbound/ModbusAdapter/plc1/control/+"
+
+    g = sc.poll_groups[0]
+    assert g.poll_interval_ms == 500          # group override
+    assert g.unit_id == 3                      # inherits connection unit
+    assert g.publish_mode == "always"          # inherits server
+    assert g.max_gap == 4
+    t = g.tags[0]
+    assert sc.resolve_publish_topic(t.topic, t.name) == "southbound/site1/ModbusAdapter/plc1/Temp"
+    assert len(sc.all_tags()) == 1
