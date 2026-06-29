@@ -1,0 +1,38 @@
+# Component config for Kubernetes, mounted as a DIRECTORY at /etc/ggcommons so the CONFIGMAP source
+# watches the kubelet ..data swap and hot-reloads in-process. Point connection.host at your Modbus
+# device/gateway Service and messaging.local.host at your in-cluster broker. `kubectl apply -f k8s/`
+# to drive a hot reload.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: modbus-adapter-config
+  labels:
+    app.kubernetes.io/name: modbus-adapter
+data:
+  config.json: |-
+    {
+      "logging": { "level": "INFO" },
+      "messaging": {
+        "local": { "type": "mqtt", "host": "emqx.default.svc.cluster.local", "port": 1883, "clientId": "modbus-adapter" }
+      },
+      "component": {
+        "global": { "defaults": { "pollIntervalMs": 1000, "publishMode": "onChange", "maxGap": 8 } },
+        "instances": [
+          {
+            "id": "plc1",
+            "adapter": "modbus",
+            "connection": { "transport": "tcp", "host": "modbus-sim.default.svc.cluster.local", "port": 5020, "unitId": 1, "timeoutMs": 1000 },
+            "publish": { "topic": "southbound/{ComponentName}/{InstanceId}/{tagId}", "batchMs": 0 },
+            "write": { "enabled": true, "topic": "southbound/{ComponentName}/{InstanceId}/write" },
+            "read": { "topic": "southbound/{ComponentName}/{InstanceId}/read" },
+            "pollGroups": [
+              { "id": "main", "pollIntervalMs": 1000,
+                "tags": [
+                  { "name": "Counter16", "table": "holding", "address": 0, "type": "uint16" },
+                  { "name": "Scaled", "table": "holding", "address": 40, "type": "uint16", "scale": 0.1 }
+                ] }
+            ]
+          }
+        ]
+      }
+    }

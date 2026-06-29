@@ -1,0 +1,90 @@
+---
+RecipeFormatVersion: "2020-01-25"
+ComponentName: "com.mbreissi.modbus.ModbusAdapter"
+ComponentVersion: "1.0.0"
+ComponentDescription: "Modbus -> Greengrass southbound adapter (pymodbus); the Python reference adapter"
+ComponentPublisher: "Marc Breissinger"
+ComponentDependencies:
+  aws.greengrass.TokenExchangeService:
+    VersionRequirement: ">=2.0.0"
+    DependencyType: "HARD"
+ComponentConfiguration:
+  DefaultConfiguration:
+    ComponentConfig:
+      logging:
+        level: "INFO"
+        python_format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+      heartbeat:
+        intervalSecs: 5
+        targets:
+          - type: "messaging"
+            config:
+              destination: "ipc"
+              topic: "heartbeat/{ThingName}/{ComponentName}"
+        measures:
+          cpu: true
+          memory: true
+          disk: false
+      tags: {}
+      metricEmission:
+        target: "log"
+        targetConfig:
+          logFileName: "/greengrass/v2/logs/{ComponentFullName}.metric.log"
+      component:
+        global:
+          defaults: { pollIntervalMs: 1000, publishMode: "onChange", maxGap: 8 }
+        # Sample instance — override connection.host/port + pollGroups for your device at deploy time.
+        instances:
+          - id: "plc1"
+            adapter: "modbus"
+            connection: { transport: "tcp", host: "127.0.0.1", port: 5020, unitId: 1, timeoutMs: 1000 }
+            publish: { topic: "southbound/{ComponentName}/{InstanceId}/{tagId}", batchMs: 0 }
+            write: { enabled: true, topic: "southbound/{ComponentName}/{InstanceId}/write" }
+            read: { topic: "southbound/{ComponentName}/{InstanceId}/read" }
+            pollGroups:
+              - id: "main"
+                pollIntervalMs: 1000
+                tags:
+                  - { name: "Counter16", table: "holding", address: 0, type: "uint16" }
+                  - { name: "Scaled", table: "holding", address: 40, type: "uint16", scale: 0.1 }
+    accessControl:
+      aws.greengrass.ipc.pubsub:
+        "com.mbreissi.modbus.ModbusAdapter:ipc:1":
+          policyDescription: Allows access to publish/subscribe to all topics on IPC
+          operations:
+            - "aws.greengrass#PublishToTopic"
+            - "aws.greengrass#SubscribeToTopic"
+          resources:
+            - "*"
+      aws.greengrass.ipc.mqttproxy:
+        "com.mbreissi.modbus.ModbusAdapter:iotcore:1":
+          policyDescription: Allows access to publish/subscribe to all topics on IoT Core.
+          operations:
+            - "aws.greengrass#PublishToIoTCore"
+            - "aws.greengrass#SubscribeToIoTCore"
+          resources:
+            - "*"
+Manifests:
+  - Platform:
+      os: all
+    Artifacts:
+      - URI: "s3://BUCKET_NAME/COMPONENT_NAME/COMPONENT_VERSION/ModbusAdapter.zip"
+        Unarchive: ZIP
+    Lifecycle:
+      # Installs into a venv under the (ggc_user-owned) work dir — no elevated privilege needed.
+      install:
+        Script: |-
+          set -e
+          COMPONENT_DIR="{work:path}"
+          python3 -m venv "$COMPONENT_DIR/venv"
+          . $COMPONENT_DIR/venv/bin/activate
+          pip3 install --upgrade pip
+          pip3 install -r {artifacts:decompressedPath}/ModbusAdapter/requirements.txt
+          pip3 install {artifacts:decompressedPath}/ModbusAdapter/greengrass_commons-*.whl
+          deactivate
+      Run:
+        Script: |-
+          set -e
+          COMPONENT_DIR="{work:path}"
+          . $COMPONENT_DIR/venv/bin/activate
+          python3 -u {artifacts:decompressedPath}/ModbusAdapter/main.py --platform GREENGRASS

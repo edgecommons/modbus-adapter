@@ -1,0 +1,23 @@
+{
+  "component": {
+    "com.mbreissi.modbus.ModbusAdapter": {
+      "author": "Marc Breissinger",
+      "version": "NEXT_PATCH",
+      "build": {
+        "build_system": "zip"
+      },
+      "publish": {
+        "bucket": "REPLACE_ME",
+        "region": "us-east-1"
+      },
+      "ignore": [
+        ".idea",
+        ".venv",
+        "tests/**",
+        "validation/**",
+        "docs/**"
+      ]
+    }
+  },
+  "gdk_version": "1.6.2"
+}
