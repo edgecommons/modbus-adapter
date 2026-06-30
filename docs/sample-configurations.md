@@ -2,7 +2,7 @@
 
 Complete, copy-paste-ready configurations for the Modbus adapter
 (`com.mbreissi.modbus.ModbusAdapter`), built up from a trivial dev loop to a realistic,
-multi-table device map with northbound topic mapping and the three-channel publishing model —
+multi-table device map with northbound topic mapping, plus how data reaches the cloud —
 with an explanation of **what every option does and how it changes runtime behavior**.
 
 These are worked examples. For the exhaustive option list see [reference/configuration.md](reference/configuration.md);
@@ -378,19 +378,22 @@ you re-template topics.
 
 ---
 
-## 3. The three-channel northbound model
+## 3. Northbound: from the local bus to the cloud
 
-Three publishing channels can coexist in **one** config — the local bus, the IoT Core control plane,
-and high-throughput streaming. They are orthogonal ggcommons subsystems wired by the library; you pick
-which traffic rides each.
+Everything above publishes to the **local bus** — Greengrass IPC on the `GREENGRASS` platform, the
+local MQTT broker on `HOST`/`KUBERNETES`. That is the adapter's data plane: `TagUpdatePublisher` sends
+every `SouthboundTagUpdate` with the plain `publish` call, and `CommandService` subscribes the
+write/read/control surface with the plain `subscribe` call — both on the default provider channel
+(the local broker on HOST, IPC on Greengrass). On-box consumers read those topics.
+
+**What the adapter sends to the cloud itself.** The one northbound path the adapter wires directly is
+its own *operational* telemetry — the heartbeat and the health metric. The library can deliver them
+straight to AWS IoT Core alongside the local bus: on `HOST`/`KUBERNETES` the dual-MQTT provider holds
+the IoT Core mTLS session next to the local one. Opt in with `messaging.iotCore` plus a heartbeat /
+metric target set to `destination: "iotcore"`:
 
 ```jsonc
 {
-  "tags": { "site": "plant1", "area": "pumphouse" },
-  "logging": { "level": "INFO" },
-
-  // Channel 1 (messaging.local) + Channel 2 (messaging.iotCore): the dual-MQTT provider
-  // connects to BOTH simultaneously on the HOST platform.
   "messaging": {
     "local":   { "type": "mqtt", "host": "localhost", "port": 1883, "clientId": "modbus-skid1" },
     "iotCore": {
@@ -405,115 +408,34 @@ which traffic rides each.
     }
   },
 
-  // Channel 2: route the low-rate health metric straight to the cloud control plane.
-  "metricEmission": {
-    "target": "messaging",
-    "targetConfig": { "topic": "southbound/{ThingName}/{ComponentName}/health", "destination": "iotcore" }
-  },
-
-  // Channel 2: heartbeat to the cloud, low rate.
+  // Heartbeat and health go to IoT Core (low rate); register data stays on the local bus.
   "heartbeat": {
     "intervalSecs": 30,
     "targets": [ { "type": "messaging", "config": { "destination": "iotcore", "topic": "heartbeat/{ThingName}/{ComponentName}" } } ],
     "measures": { "cpu": true, "memory": true }
   },
-
-  // Channel 3 (streaming): durable store-and-forward to Kinesis for the high-rate process data.
-  "streaming": {
-    "streams": [
-      {
-        "name": "process-highrate",
-        "sink": { "type": "kinesis", "streamName": "telemetry-{ThingName}", "region": "us-east-1" },
-        "buffer": { "type": "disk", "path": "/var/lib/ggcommons/streams/process", "maxDiskBytes": 1073741824, "onFull": "dropOldest", "fsync": "perBatch" },
-        "batch":  { "maxRecords": 500, "maxBytes": 4194304, "maxLatencyMs": 1000, "compression": "zstd" },
-        "delivery": { "maxRetries": -1, "backoffBaseMs": 50, "backoffMaxMs": 30000 }
-      }
-    ]
-  },
-
-  "component": {
-    "global": { "defaults": { "pollIntervalMs": 1000, "publishMode": "onChange", "maxGap": 8 } },
-    "instances": [
-      {
-        "id": "skid1",
-        "connection": { "transport": "tcp", "host": "10.0.0.50", "port": 502, "unitId": 1, "timeoutMs": 1000 },
-        "publish": { "topic": "southbound/{site}/{ComponentName}/{InstanceId}/{tagId}" },
-        "write":   { "enabled": true },
-        "pollGroups": [
-          { "id": "process", "pollIntervalMs": 250,
-            "tags": [
-              { "name": "Temperature", "table": "holding", "address": 0, "type": "float32",
-                "deadband": { "type": "absolute", "value": 0.2 } },
-              { "name": "Pressure",    "table": "holding", "address": 2, "type": "float32" },
-              { "name": "FlowRate",    "table": "holding", "address": 4, "type": "float32" }
-            ] }
-        ]
-      }
-    ]
+  "metricEmission": {
+    "target": "messaging",
+    "targetConfig": { "topic": "southbound/{ThingName}/{ComponentName}/health", "destination": "iotcore" }
   }
 }
 ```
 
-### The three channels
+On `GREENGRASS` the same `destination: "iotcore"` routes through the Nucleus' IoT Core connection, so
+`messaging.iotCore` is not needed there.
 
-| # | Channel | Config | Transport | Typical traffic | Rate / QoS / cost |
-|---|---------|--------|-----------|-----------------|-------------------|
-| 1 | **Local bus** | `messaging.local` (HOST/K8s) or IPC (GREENGRASS) | local MQTT broker / Nucleus IPC | the adapter's `SouthboundTagUpdate` data plane and the write/read/control command surface | highest rate, in-edge, free; consumed by other on-box components |
-| 2 | **Cloud control plane** | `messaging.iotCore` | AWS IoT Core (mTLS, 8883) | low-rate status/health and command-and-control: device `southbound_health`, heartbeat, alarms, setpoint writes | lower rate, QoS 0/1, **priced per message** — keep it sparse |
-| 3 | **Streaming** | `streaming.streams[]` (`gg.streams()`) | Kinesis / Kafka via the durable `ggstreamlog` buffer | high-rate, high-volume telemetry for analytics/historian | batched + compressed, durable across disconnects, cheap per record at volume |
+**Forwarding the register data itself.** The adapter does **not** push polled register telemetry
+off-box — it publishes locally and stops there. Getting that data to the cloud is a deployment
+choice, handled by a separate consumer of the local topics:
 
-### What rides each channel today (be precise)
-
-- **Channel 1 is the adapter's default.** `TagUpdatePublisher` publishes every `SouthboundTagUpdate`
-  with the plain `publish` call, and `CommandService` subscribes write/read/control with the plain
-  `subscribe` call — both use the **default** provider channel: the local broker on HOST, IPC on
-  Greengrass. All polled telemetry and the command surface ride Channel 1.
-- **Channel 2 is opt-in by config, today, for the library's own northbound traffic.** Setting
-  `metricEmission.targetConfig.destination: iotcore` sends the `southbound_health` metric straight to
-  IoT Core (`MessagingClient.publish_to_iot_core`), and a `heartbeat` target with
-  `config.destination: iotcore` does the same for the heartbeat. The dual-MQTT provider holds the
-  IoT Core mTLS session alongside the local one. The adapter's *data-plane* tag updates and command
-  surface still ride Channel 1; cloud → device commands and alarm fan-out reach IoT Core via a
-  Greengrass/IoT-Core topic bridge (rules engine) or an on-box subscriber that re-publishes selected
-  local topics northbound — the standard edge pattern, not an adapter option.
-- **Channel 3 is the `gg.streams()` subsystem.** The `streaming` section is a valid, parsed config
-  block that opens durable buffers draining to Kinesis/Kafka. It is the high-throughput path for the
-  registers whose volume would overwhelm (and over-bill) the IoT Core control plane.
-
-### When to route a register to streaming vs the MQTT control plane
-
-| If the register is… | Route it to… | Why |
-|---------------------|--------------|-----|
-| polled fast (e.g. the 250 ms `process` floats), analytics/historian-bound | **streaming (Channel 3)** | Kinesis/Kafka batch + compress; the durable buffer survives a WAN outage and replays; per-record cost is far below per-message IoT Core at this volume. |
-| low-rate, command/alarm/state, something acts on each message | **MQTT control plane (Channel 2)** | IoT Core gives QoS, rules-engine routing, and cloud round-trips for commands; a handful of messages/min keeps per-message cost negligible. |
-| consumed by another component on the same box | **local bus (Channel 1)** | no cloud hop, no cost; lowest latency. |
-
-Rule of thumb: **volume and intent**. High-rate + analytics → streaming; low-rate + actionable →
-the IoT Core control plane; in-edge → the local bus.
-
-### Streaming option reference (verified against the schema)
-
-Each stream needs at least `name` + `sink`; always declare a `buffer` too (a durable `disk` buffer
-needs a `path`; omit `path` only for an in-memory buffer). `batch`/`delivery` are optional tuning.
-
-| Option | Definition |
-|--------|-----------|
-| `streams[].name` | Stream identifier (the handle for `gg.streams().stream(name)`). |
-| `sink` (kinesis) | `{ "type": "kinesis", "streamName", "region"?, "endpointUrl"? }` — `streamName` supports template vars; `endpointUrl` overrides the endpoint (LocalStack/floci/VPC). |
-| `sink` (kafka) | `{ "type": "kafka", "bootstrapServers", "topic", "properties"? }` — `properties` is an open map of librdkafka producer props. |
-| `buffer.type` | `disk` (durable, file-backed, needs `path`) or `memory` (non-durable RAM ring). Default `disk`. |
-| `buffer.path` | Buffer directory (disk only; supports template vars). |
-| `buffer.segmentBytes` / `maxDiskBytes` / `maxAgeSecs` | Segment size, on-disk backlog cap (default ~1 GiB), optional age cap. |
-| `buffer.onFull` | `dropOldest` (default) / `block` / `rejectNew` when the backlog hits `maxDiskBytes`. |
-| `buffer.fsync` / `fsyncIntervalMs` | Durability flush policy (`always` / `perBatch` / `interval`). |
-| `buffer.maxBufferedRecords` | In-flight record cap (default 10000). |
-| `batch.maxRecords` / `maxBytes` / `maxLatencyMs` | Export batch size / byte / latency triggers (defaults 500 / 4 MiB / 1000 ms). |
-| `batch.compression` | `none` (default) or `zstd`. |
-| `delivery.maxRetries` | `-1` = retry forever (durable backlog never drops on transient cloud failure). |
-| `delivery.backoffBaseMs` / `backoffMaxMs` / `pollIntervalMs` | Export retry/poll backoff. |
-
-For local testing, point the sink at floci: `"sink": { "type": "kinesis", "streamName": "telemetry",
-"region": "us-east-1", "endpointUrl": "http://localhost:4566" }`.
+- **Low-rate, actionable** items (state, alarms, a setpoint readback someone acts on) — re-publish
+  to AWS IoT Core via a Greengrass/IoT-Core **topic bridge** (rules engine) or a small on-box
+  subscriber. IoT Core is priced per message, so keep this sparse.
+- **High-rate, high-volume** process data for analytics or a historian — the library's streaming
+  subsystem, `gg.streams()`, which batches and compresses into a durable on-disk buffer that drains to
+  Kinesis or Kafka and survives WAN outages. See the [Streaming guide](/guides/streaming/) and the
+  [streaming reference](/reference/streaming/) for its configuration; it is a `ggcommons` subsystem you
+  run in a forwarding component, not a `modbus-adapter` option.
 
 ---
 
