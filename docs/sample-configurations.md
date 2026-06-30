@@ -1,18 +1,39 @@
 # Sample Configurations
 
 Complete, copy-paste-ready configurations for the Modbus adapter
-(`com.mbreissi.modbus.ModbusAdapter`), one per realistic deployment scenario, with an explanation of
-**what every option does and how it changes runtime behavior**.
+(`com.mbreissi.modbus.ModbusAdapter`), built up from a trivial dev loop to a realistic,
+multi-table device map with northbound topic mapping and the three-channel publishing model —
+with an explanation of **what every option does and how it changes runtime behavior**.
 
 These are worked examples. For the exhaustive option list see [reference/configuration.md](reference/configuration.md);
 for the type/byte-order system see [reference/data-types.md](reference/data-types.md); for task recipes
 see [how-to-guides.md](how-to-guides.md); for the message envelopes see
-[reference/messaging-interface.md](reference/messaging-interface.md).
+[reference/messaging-interface.md](reference/messaging-interface.md); for the data/control plane model
+see [explanation.md](explanation.md).
 
 The adapter loads **one JSON document** from `-c/--config`. The top level may contain `component`
-(required — the adapter), and the standard ggcommons sections `tags`, `messaging`, `metricEmission`,
-`logging`, and `heartbeat`. Timing values resolve **tag/group ▸ instance `defaults` ▸
-`global.defaults` ▸ built-in**.
+(required — the adapter) and the standard ggcommons sections `tags`, `messaging`, `metricEmission`,
+`logging`, `heartbeat`, and (opt-in) `streaming`. Timing values resolve **tag/group ▸ instance
+`defaults` ▸ `global.defaults` ▸ built-in**.
+
+---
+
+## Addressing convention (read this first)
+
+Every register table maps to a Modbus function code, and the adapter always uses the **0-based PDU
+address** — *not* the 1-based 4xxxx/3xxxx/1xxxx/0xxxx convention printed in most vendor manuals. The
+two relate by a fixed offset per table:
+
+| Table | `table` value | FC (read) | FC (write) | Element | Vendor convention | `address` (config) |
+|-------|---------------|-----------|------------|---------|-------------------|--------------------|
+| Coil | `coil` | 1 | 5 / 15 | 1 bit → bool | `0xxxx` (00001…) | vendor − 1 |
+| Discrete input | `discrete` | 2 | — (read-only) | 1 bit → bool | `1xxxx` (10001…) | vendor − 10001 |
+| Holding register | `holding` | 3 | 6 / 16 | 16-bit register | `4xxxx` (40001…) | vendor − 40001 |
+| Input register | `input` | 4 | — (read-only) | 16-bit register | `3xxxx` (30001…) | vendor − 30001 |
+
+So holding register **40001** is `address: 0`, **40003** is `address: 2`, and so on — multi-register
+values (a `float32`/`uint32` spans 2 registers) advance the vendor number by 2 each. The tables below
+list both columns so you can transcribe a vendor map without arithmetic mistakes.
 
 ---
 
@@ -71,7 +92,7 @@ You can drop the `messaging` section entirely and pass the broker inline instead
 | `pollGroups[].pollIntervalMs` | How often this group is read end-to-end. `1000` = once per second. Lower = fresher data but more bus traffic. |
 | tag `name` | Required human name; the `{tagId}` topic variable and the friendly handle for reads/writes. |
 | tag `table` | Which Modbus space + function code: `holding`(FC3) / `input`(FC4) registers, `coil`(FC1) / `discrete`(FC2) bits. |
-| tag `address` | **0-based PDU address** (not the 4xxxx/1-based convention). |
+| tag `address` | **0-based PDU address** (see the convention table above). |
 | tag `type` | How raw registers/bits decode. Register tables default to `uint16`; bit tables are always `bool`. |
 
 With `publishMode` unset it defaults to `onChange` and (no `deadband`) republishes whenever a value
@@ -80,7 +101,423 @@ publish.
 
 ---
 
-## 2. Serial RTU and RTU-over-TCP
+## 2. A realistic multi-table device map
+
+This is the centerpiece. A single instance talks to a **pump skid** behind one TCP gateway at
+`10.0.0.50:502`, addressing **two unit ids on the same socket**: the skid **PLC** (`unitId 1`,
+control/status/alarms) and an integrated **power/energy meter** (`unitId 2`, totalizers/diagnostics).
+The map below is representative of a real device — contiguous ranged blocks, mixed data types, a
+word-swapped energy counter, a byte-swapped float, and a packed status word with bit-extracted
+alarms.
+
+### Device map
+
+**Holding registers — `unitId 1`, FC3 read / FC6·FC16 write** (process values, setpoints, status word)
+
+| Vendor | `address` | Tag | `type` | `scale` | R/W | Engineering meaning |
+|--------|-----------|-----|--------|---------|-----|---------------------|
+| 40001–40002 | `0` | `Temperature` | `float32` | — | R | Process temperature °C |
+| 40003–40004 | `2` | `Pressure` | `float32` | — | R | Header pressure bar |
+| 40005–40006 | `4` | `FlowRate` | `float32` | — | R | Flow m³/h |
+| 40007–40008 | `6` | `Setpoint` | `float32` | — | R/W | Temperature setpoint °C |
+| 40009 | `8` | `PumpSpeedCmd` | `uint16` | `0.1` | R/W | Pump speed command % (0.1 resolution) |
+| 40010 | `9` | `TempTrim` | `int16` | `0.1` | R/W | **Signed** trim °C (can be negative) |
+| 40017 | `16` | `StatusWord` | `uint16` | — | R | Packed status/alarm bits (see below) |
+
+**Input registers — `unitId 2`, FC4 read-only** (meter totalizers and diagnostics)
+
+| Vendor | `address` | Tag | `type` | order / scale | Engineering meaning |
+|--------|-----------|-----|--------|---------------|---------------------|
+| 30001–30002 | `0` | `EnergyImport` | `uint32` | `wordOrder: little`, `scale: 0.001` | Imported energy kWh (low word first) |
+| 30003–30004 | `2` | `EnergyExport` | `uint32` | `wordOrder: little`, `scale: 0.001` | Exported energy kWh |
+| 30005–30006 | `4` | `NetPower` | `int32` | `scale: 0.001` | **Signed** net power kW (− = export) |
+| 30007–30008 | `6` | `RunHours` | `uint32` | — | Run-time hours |
+| 30009 | `8` | `FaultCount` | `uint16` | — | Lifetime fault count |
+| 30011–30018 | `10` | `SerialNo` | `string` | `count: 8` | Meter serial (16 UTF-8 bytes) |
+| 30019 | `18` | `FirmwareVer` | `uint16` | — | Firmware revision |
+| 30021–30022 | `20` | `PhaseAngle` | `float32` | `byteOrder: little` | Phase angle ° (**byte-swapped** device) |
+
+**Coils — `unitId 1`, FC1 read / FC5·FC15 write** (command bits, polled for read-back)
+
+| Vendor | `address` | Tag | Meaning |
+|--------|-----------|-----|---------|
+| 00001 | `0` | `RunCmd` | Start/stop command |
+| 00002 | `1` | `ResetCmd` | Fault reset |
+| 00003 | `2` | `RemoteEnable` | Remote-control enable |
+
+**Discrete inputs — `unitId 1`, FC2 read-only** (status bits)
+
+| Vendor | `address` | Tag | Meaning |
+|--------|-----------|-----|---------|
+| 10001 | `0` | `Running` | Pump running |
+| 10002 | `1` | `Fault` | Fault active |
+| 10003 | `2` | `LocalMode` | Local (not remote) |
+| 10004 | `3` | `HighLevelSwitch` | High-level float |
+| 10005 | `4` | `LowLevelSwitch` | Low-level float |
+| 10006 | `5` | `DoorOpen` | Enclosure door |
+
+**Status word bit extraction — `StatusWord` (holding `address 16`, `unitId 1`)**
+
+A single 16-bit register packs six status flags. Each is surfaced as its own boolean tag with
+`type: bool` + `bit: N` on the **same** address `16`, so all six come from one register read:
+
+| `bit` | Tag | Meaning |
+|-------|-----|---------|
+| 0 | `AlarmHigh` | High-process alarm |
+| 1 | `AlarmLow` | Low-process alarm |
+| 2 | `OverTemp` | Over-temperature |
+| 3 | `MotorFault` | Motor fault |
+| 4 | `CommError` | Field-bus comm error |
+| 5 | `MaintenanceDue` | Maintenance due |
+
+### The config
+
+```jsonc
+{
+  "tags": { "site": "plant1", "area": "pumphouse", "line": "5" },
+  "logging": { "level": "INFO" },
+  "messaging": {
+    "local": { "type": "mqtt", "host": "localhost", "port": 1883, "clientId": "modbus-skid1" }
+  },
+  "metricEmission": { "target": "messaging", "targetConfig": { "topic": "metrics/{ThingName}/{ComponentName}" } },
+  "component": {
+    "global": { "defaults": { "pollIntervalMs": 1000, "publishMode": "onChange", "maxGap": 8, "batchMs": 0 } },
+    "instances": [
+      {
+        "id": "skid1",
+        "adapter": "modbus",
+        "connection": { "transport": "tcp", "host": "10.0.0.50", "port": 502, "unitId": 1, "timeoutMs": 1000 },
+        "publish": { "topic": "southbound/{site}/{ComponentName}/{InstanceId}/{tagId}", "batchMs": 0 },
+        "write":   { "enabled": true, "topic": "southbound/{ComponentName}/{InstanceId}/write" },
+        "read":    { "topic": "southbound/{ComponentName}/{InstanceId}/read" },
+        "pollGroups": [
+
+          { "id": "process", "pollIntervalMs": 250, "unitId": 1, "publishMode": "onChange", "maxGap": 8,
+            "tags": [
+              { "name": "Temperature",  "table": "holding", "address": 0, "type": "float32",
+                "deadband": { "type": "absolute", "value": 0.2 } },
+              { "name": "Pressure",     "table": "holding", "address": 2, "type": "float32",
+                "deadband": { "type": "percent", "value": 1.0 } },
+              { "name": "FlowRate",     "table": "holding", "address": 4, "type": "float32" },
+              { "name": "Setpoint",     "table": "holding", "address": 6, "type": "float32" },
+              { "name": "PumpSpeedCmd", "table": "holding", "address": 8, "type": "uint16", "scale": 0.1 },
+              { "name": "TempTrim",     "table": "holding", "address": 9, "type": "int16",  "scale": 0.1 },
+
+              { "name": "AlarmHigh",      "table": "holding", "address": 16, "type": "bool", "bit": 0,
+                "topic": "southbound/{site}/alarms/{InstanceId}/{tagId}" },
+              { "name": "AlarmLow",       "table": "holding", "address": 16, "type": "bool", "bit": 1,
+                "topic": "southbound/{site}/alarms/{InstanceId}/{tagId}" },
+              { "name": "OverTemp",       "table": "holding", "address": 16, "type": "bool", "bit": 2,
+                "topic": "southbound/{site}/alarms/{InstanceId}/{tagId}" },
+              { "name": "MotorFault",     "table": "holding", "address": 16, "type": "bool", "bit": 3,
+                "topic": "southbound/{site}/alarms/{InstanceId}/{tagId}" },
+              { "name": "CommError",      "table": "holding", "address": 16, "type": "bool", "bit": 4 },
+              { "name": "MaintenanceDue", "table": "holding", "address": 16, "type": "bool", "bit": 5 }
+            ] },
+
+          { "id": "totals", "pollIntervalMs": 5000, "unitId": 2, "publishMode": "always", "maxGap": 8,
+            "tags": [
+              { "name": "EnergyImport", "table": "input", "address": 0,  "type": "uint32", "wordOrder": "little", "scale": 0.001 },
+              { "name": "EnergyExport", "table": "input", "address": 2,  "type": "uint32", "wordOrder": "little", "scale": 0.001 },
+              { "name": "NetPower",     "table": "input", "address": 4,  "type": "int32",  "scale": 0.001 },
+              { "name": "RunHours",     "table": "input", "address": 6,  "type": "uint32" },
+              { "name": "FaultCount",   "table": "input", "address": 8,  "type": "uint16" },
+              { "name": "SerialNo",     "table": "input", "address": 10, "type": "string", "count": 8 },
+              { "name": "FirmwareVer",  "table": "input", "address": 18, "type": "uint16" },
+              { "name": "PhaseAngle",   "table": "input", "address": 20, "type": "float32", "byteOrder": "little" }
+            ] },
+
+          { "id": "status", "pollIntervalMs": 1000, "unitId": 1, "publishMode": "onChange",
+            "tags": [
+              { "name": "RunCmd",       "table": "coil", "address": 0, "type": "bool" },
+              { "name": "ResetCmd",     "table": "coil", "address": 1, "type": "bool" },
+              { "name": "RemoteEnable", "table": "coil", "address": 2, "type": "bool" },
+
+              { "name": "Running",         "table": "discrete", "address": 0, "type": "bool" },
+              { "name": "Fault",           "table": "discrete", "address": 1, "type": "bool" },
+              { "name": "LocalMode",       "table": "discrete", "address": 2, "type": "bool" },
+              { "name": "HighLevelSwitch", "table": "discrete", "address": 3, "type": "bool" },
+              { "name": "LowLevelSwitch",  "table": "discrete", "address": 4, "type": "bool" },
+              { "name": "DoorOpen",        "table": "discrete", "address": 5, "type": "bool" }
+            ] }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### How the groups behave
+
+Each poll group runs on **its own daemon thread**, so the `250 ms` `process` loop, the `5000 ms`
+`totals` loop, and the `1000 ms` `status` loop run concurrently and independently. The poller
+coalesces each group's tags **per table** into the fewest Modbus reads, sorting by address and
+bridging gaps up to `maxGap`.
+
+**`process` (fast control data, `unitId 1`, every 250 ms).** All twelve tags are holding registers,
+so they coalesce into **one read**. The numeric tags occupy registers `0–9` (contiguous), and the six
+alarm bits all read register `16`. With `maxGap 8` the poller bridges the 6-register gap (registers
+`10–15` are read but unused) and issues a single `read_holding_registers(0, count=17)`:
+
+```
+0  1   2  3   4  5   6  7   8     9      10 11 12 13 14 15   16
+└Temperature┘└Pressure┘└FlowRate┘└Setpnt┘Pump  Trim  └── unused (gap) ──┘ Status
+```
+
+- `Temperature` decodes a `float32`, and only republishes when it moves at least **0.2** °C from the
+  last published value (`deadband absolute`).
+- `Pressure` republishes only when it changes by at least **1.0 percent** of the previous value
+  (`deadband percent`). When the previous value is `0`, percent can't be computed so any change publishes.
+- `FlowRate` has no deadband, so under `onChange` it republishes on any change.
+- `PumpSpeedCmd`/`TempTrim` are writable; reading them here gives a command **read-back**. `TempTrim`
+  is `int16`, so it carries negative trims correctly. Both apply `scale 0.1`, so raw `455` → `45.5`.
+- `AlarmHigh…MaintenanceDue` extract bits `0–5` of the one `StatusWord` register, surfacing packed
+  bits as individual booleans; the four true alarms also override their publish topic (see mapping below).
+- Had `maxGap` been `< 6` (e.g. the contiguous-only `maxGap: 0`), the `StatusWord` block would not
+  merge and the group would issue **two** reads — `read_holding_registers(0, count=10)` and
+  `read_holding_registers(16, count=1)`.
+
+**`totals` (slow meter counters, `unitId 2`, every 5 s, `always`).** `unitId: 2` overrides the
+connection's `unitId: 1`, addressing the meter behind the same socket. `publishMode: always`
+republishes every poll regardless of change — right for monotonic counters and a steady "still alive"
+signal. All eight tags are input registers spanning `0–21`; the two 1-register gaps (`9`, `19`) are
+`≤ maxGap 8`, so they coalesce into a single `read_input_registers(0, count=22)`.
+
+- `EnergyImport`/`EnergyExport` are `uint32` with `wordOrder: little` because this meter stores the
+  low-order register first; without it the value is word-swapped and wildly wrong. `scale 0.001`
+  converts Wh counts to kWh (a scaled integer is emitted as a float).
+- `NetPower` is `int32` so it can go negative when the site exports.
+- `SerialNo` is a `string` spanning `count: 8` registers (16 UTF-8 bytes, null-trimmed).
+- `PhaseAngle` is a `float32` with `byteOrder: little` (a BADC device): the bytes within each register
+  are swapped while the register order stays big — see the four-layout table in
+  [reference/data-types.md](reference/data-types.md).
+
+**`status` (command read-back + status bits, `unitId 1`, every 1 s).** Coils and discretes are
+**different tables**, so coalescing produces one read each: `read_coils(0, count=3)` and
+`read_discrete_inputs(0, count=6)`. Single bits decode straight to booleans.
+
+**Net bus load** ≈ `process` 1 read × 4/s + `status` 2 reads × 1/s + `totals` 1 read × 0.2/s ≈ **6.2
+requests/second** across both unit ids on the one socket.
+
+### Northbound topic mapping
+
+Every published `SouthboundTagUpdate` resolves its topic from `publish.topic` (or a per-tag `topic`
+override), substituting template tokens and **sanitizing** each value (`/`, `+`, `#`, and whitespace →
+`_`). With `publish.topic = southbound/{site}/{ComponentName}/{InstanceId}/{tagId}`, `tags.site =
+plant1`, component `com.mbreissi.modbus.ModbusAdapter`, and instance `skid1`:
+
+| Tag (register) | Effective template | Resolved topic |
+|----------------|--------------------|----------------|
+| `Temperature` (holding 0, u1) | instance `publish.topic` | `southbound/plant1/com.mbreissi.modbus.ModbusAdapter/skid1/Temperature` |
+| `EnergyImport` (input 0, u2) | instance `publish.topic` | `southbound/plant1/com.mbreissi.modbus.ModbusAdapter/skid1/EnergyImport` |
+| `RunCmd` (coil 0, u1) | instance `publish.topic` | `southbound/plant1/com.mbreissi.modbus.ModbusAdapter/skid1/RunCmd` |
+| `AlarmHigh` (holding 16 bit 0, u1) | per-tag `topic` override | `southbound/plant1/alarms/skid1/AlarmHigh` |
+
+Tokens: `{ThingName}` (the `-t`/identity), `{ComponentName}` and `{ComponentFullName}` (dots are kept —
+only `/ + #` and whitespace are sanitized), `{InstanceId}` (the instance `id`), `{tagId}` (the tag
+`name`), plus any key under top-level `tags` (here `{site}`).
+
+**Worked example — `AlarmHigh`.** It reads bit 0 of `StatusWord` on `unitId 1`, and its per-tag
+override routes it to the alarms topic. The resolved topic is
+`southbound/plant1/alarms/skid1/AlarmHigh`, and the body carries the canonical tag identity:
+
+```jsonc
+"body": {
+  "device": { "adapter": "modbus", "instance": "skid1", "endpoint": "tcp://10.0.0.50:502 unit=1" },
+  "tag": {
+    "id": "u1/holding/16/bool",
+    "name": "AlarmHigh",
+    "address": { "unitId": 1, "table": "holding", "address": 16, "type": "bool", "bit": 0 }
+  },
+  "samples": [ { "value": true, "quality": "GOOD", "qualityRaw": "Good", "sourceTs": null, "serverTs": "2026-06-29T01:48:00Z" } ]
+}
+```
+
+`tag.id` is the stable canonical id `u<unitId>/<table>/<address>/<type>`; `tag.address` is the
+protocol-native handle. Both are independent of the topic, so a consumer can key on identity even if
+you re-template topics.
+
+### Option → runtime effect
+
+| Option | Effect on runtime behavior |
+|--------|---------------------------|
+| `global.defaults` / instance `defaults` | Fallback `pollIntervalMs` / `publishMode` / `maxGap` / `batchMs` inherited when a group/instance omits them. Resolution order is **group ▸ instance `defaults` ▸ `global.defaults` ▸ built-in**. |
+| `connection.unitId` | Default unit id for the instance; overridden here per-group (`totals` → unit 2). |
+| `connection.timeoutMs` | Per-request response timeout (default `1000`). A read that exceeds it marks that block's tags `BAD` and increments `readErrors`. |
+| `publish.topic` | Template for `SouthboundTagUpdate` topics; `{…}` tokens are substituted and sanitized per message. |
+| `publish.batchMs` | `0` = publish each sample immediately; `>0` buffers per tag and flushes together (see [batching](#batching-batchms)). Set under `publish` or `defaults`; **not** per poll group. |
+| `write.enabled` | `true` subscribes the write topic so external clients can command the device. `false` (default) leaves it unsubscribed — writes are impossible. |
+| `write.topic` / `read.topic` | The command surface (fire-and-forget writes; request/reply reads). A `…/control/+` topic is always subscribed for `status`/`tags`. |
+| `pollGroups[].pollIntervalMs` | One full read-decode-publish pass for the group. The loop subtracts its own work time, so a slow read shortens (never lengthens) the next sleep — the configured cadence is the ceiling. |
+| `pollGroups[].unitId` | Overrides `connection.unitId` for this group — addresses multiple slaves behind one TCP/RTU-TCP gateway or RTU line from one instance. |
+| `pollGroups[].publishMode: onChange` | A decoded value publishes only if it passes its `deadband` vs the last published value (the first read always publishes). Cuts message volume on steady signals. |
+| `pollGroups[].publishMode: always` | Every poll publishes, change or not. Use for counters/totalizers or a heartbeat-style feed. |
+| `pollGroups[].maxGap` | Largest address gap (registers/bits) the coalescer bridges to merge two tags into one read. `0` = strictly contiguous only; higher = fewer, larger reads (less overhead) at the cost of reading unused registers. Each block is capped at the protocol max (125 registers, 2000 bits). Coalescing is **per table**. |
+| tag `type` (`int16`/`uint16`/`int32`/`uint32`/`int64`/`uint64`/`float32`/`float64`/`string`/`bool`) | Determines how many registers the tag spans and how the raw words are interpreted (see [data-types](reference/data-types.md)). |
+| tag `wordOrder` | Order of the registers in a multi-register value. `big` (default) = most-significant first; `little` = reversed (word swap). |
+| tag `byteOrder` | Order of bytes within each register. `big` (default)/`little`. The two knobs cover ABCD/BADC/CDAB/DCBA. Wrong order = right magnitude class, garbled value. |
+| tag `scale` / `offset` | Linear transform `value = raw × scale + offset` on read (inverted on write). Converts raw counts to engineering units; a scaled integer is emitted as a float. |
+| tag `count` | Registers a `string` spans (2 UTF-8 bytes each). Required for `string`. |
+| tag `bit` (0–15) | Publishes a single bit of a holding/input register as a boolean. Only valid with `type: bool` on a register table. Bit *writes* (read-modify-write) are not implemented. |
+| tag `deadband` | Per-tag change filter under `onChange`: `none` (any change), `absolute` (`|new−old| ≥ value`), `percent` (`|new−old| ≥ value%` of old; any change when old is `0`). Non-numeric tags (bool/string) publish on any change. |
+| tag `topic` | Per-tag override of `publish.topic` — route specific tags (e.g. alarms) to their own topic. |
+
+### Batching (`batchMs`)
+
+`batchMs` (under `publish`, or `global`/instance `defaults`) coalesces messages across time:
+
+```jsonc
+"publish": { "topic": "southbound/{site}/{ComponentName}/{InstanceId}/{tagId}", "batchMs": 1000 }
+```
+
+- `batchMs: 0` (default) — every sample publishes immediately as its own `SouthboundTagUpdate`.
+- `batchMs > 0` — samples are buffered per tag and flushed together on a timer every `batchMs`, so one
+  message can carry several `samples` for a tag. This trades freshness/latency for far fewer, larger
+  messages — useful on constrained uplinks. The device's flush tick is `batchMs` (or 5 s when batching
+  is off); it also drives the periodic `southbound_health` emission.
+
+---
+
+## 3. The three-channel northbound model
+
+Three publishing channels can coexist in **one** config — the local bus, the IoT Core control plane,
+and high-throughput streaming. They are orthogonal ggcommons subsystems wired by the library; you pick
+which traffic rides each.
+
+```jsonc
+{
+  "tags": { "site": "plant1", "area": "pumphouse" },
+  "logging": { "level": "INFO" },
+
+  // Channel 1 (messaging.local) + Channel 2 (messaging.iotCore): the dual-MQTT provider
+  // connects to BOTH simultaneously on the HOST platform.
+  "messaging": {
+    "local":   { "type": "mqtt", "host": "localhost", "port": 1883, "clientId": "modbus-skid1" },
+    "iotCore": {
+      "endpoint": "a1b2c3d4e5f6g7-ats.iot.us-east-1.amazonaws.com",
+      "port": 8883,
+      "clientId": "modbus-skid1",
+      "credentials": {
+        "certPath": "/greengrass/v2/thingCert.crt",
+        "keyPath":  "/greengrass/v2/privKey.key",
+        "caPath":   "/greengrass/v2/rootCA.pem"
+      }
+    }
+  },
+
+  // Channel 2: route the low-rate health metric straight to the cloud control plane.
+  "metricEmission": {
+    "target": "messaging",
+    "targetConfig": { "topic": "southbound/{ThingName}/{ComponentName}/health", "destination": "iotcore" }
+  },
+
+  // Channel 2: heartbeat to the cloud, low rate.
+  "heartbeat": {
+    "intervalSecs": 30,
+    "targets": [ { "type": "messaging", "config": { "destination": "iotcore", "topic": "heartbeat/{ThingName}/{ComponentName}" } } ],
+    "measures": { "cpu": true, "memory": true }
+  },
+
+  // Channel 3 (streaming): durable store-and-forward to Kinesis for the high-rate process data.
+  "streaming": {
+    "streams": [
+      {
+        "name": "process-highrate",
+        "sink": { "type": "kinesis", "streamName": "telemetry-{ThingName}", "region": "us-east-1" },
+        "buffer": { "type": "disk", "path": "/var/lib/ggcommons/streams/process", "maxDiskBytes": 1073741824, "onFull": "dropOldest", "fsync": "perBatch" },
+        "batch":  { "maxRecords": 500, "maxBytes": 4194304, "maxLatencyMs": 1000, "compression": "zstd" },
+        "delivery": { "maxRetries": -1, "backoffBaseMs": 50, "backoffMaxMs": 30000 }
+      }
+    ]
+  },
+
+  "component": {
+    "global": { "defaults": { "pollIntervalMs": 1000, "publishMode": "onChange", "maxGap": 8 } },
+    "instances": [
+      {
+        "id": "skid1",
+        "connection": { "transport": "tcp", "host": "10.0.0.50", "port": 502, "unitId": 1, "timeoutMs": 1000 },
+        "publish": { "topic": "southbound/{site}/{ComponentName}/{InstanceId}/{tagId}" },
+        "write":   { "enabled": true },
+        "pollGroups": [
+          { "id": "process", "pollIntervalMs": 250,
+            "tags": [
+              { "name": "Temperature", "table": "holding", "address": 0, "type": "float32",
+                "deadband": { "type": "absolute", "value": 0.2 } },
+              { "name": "Pressure",    "table": "holding", "address": 2, "type": "float32" },
+              { "name": "FlowRate",    "table": "holding", "address": 4, "type": "float32" }
+            ] }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### The three channels
+
+| # | Channel | Config | Transport | Typical traffic | Rate / QoS / cost |
+|---|---------|--------|-----------|-----------------|-------------------|
+| 1 | **Local bus** | `messaging.local` (HOST/K8s) or IPC (GREENGRASS) | local MQTT broker / Nucleus IPC | the adapter's `SouthboundTagUpdate` data plane and the write/read/control command surface | highest rate, in-edge, free; consumed by other on-box components |
+| 2 | **Cloud control plane** | `messaging.iotCore` | AWS IoT Core (mTLS, 8883) | low-rate status/health and command-and-control: device `southbound_health`, heartbeat, alarms, setpoint writes | lower rate, QoS 0/1, **priced per message** — keep it sparse |
+| 3 | **Streaming** | `streaming.streams[]` (`gg.streams()`) | Kinesis / Kafka via the durable `ggstreamlog` buffer | high-rate, high-volume telemetry for analytics/historian | batched + compressed, durable across disconnects, cheap per record at volume |
+
+### What rides each channel today (be precise)
+
+- **Channel 1 is the adapter's default.** `TagUpdatePublisher` publishes every `SouthboundTagUpdate`
+  with the plain `publish` call, and `CommandService` subscribes write/read/control with the plain
+  `subscribe` call — both use the **default** provider channel: the local broker on HOST, IPC on
+  Greengrass. All polled telemetry and the command surface ride Channel 1.
+- **Channel 2 is opt-in by config, today, for the library's own northbound traffic.** Setting
+  `metricEmission.targetConfig.destination: iotcore` sends the `southbound_health` metric straight to
+  IoT Core (`MessagingClient.publish_to_iot_core`), and a `heartbeat` target with
+  `config.destination: iotcore` does the same for the heartbeat. The dual-MQTT provider holds the
+  IoT Core mTLS session alongside the local one. The adapter's *data-plane* tag updates and command
+  surface still ride Channel 1; cloud → device commands and alarm fan-out reach IoT Core via a
+  Greengrass/IoT-Core topic bridge (rules engine) or an on-box subscriber that re-publishes selected
+  local topics northbound — the standard edge pattern, not an adapter option.
+- **Channel 3 is the `gg.streams()` subsystem.** The `streaming` section is a valid, parsed config
+  block that opens durable buffers draining to Kinesis/Kafka. It is the high-throughput path for the
+  registers whose volume would overwhelm (and over-bill) the IoT Core control plane.
+
+### When to route a register to streaming vs the MQTT control plane
+
+| If the register is… | Route it to… | Why |
+|---------------------|--------------|-----|
+| polled fast (e.g. the 250 ms `process` floats), analytics/historian-bound | **streaming (Channel 3)** | Kinesis/Kafka batch + compress; the durable buffer survives a WAN outage and replays; per-record cost is far below per-message IoT Core at this volume. |
+| low-rate, command/alarm/state, something acts on each message | **MQTT control plane (Channel 2)** | IoT Core gives QoS, rules-engine routing, and cloud round-trips for commands; a handful of messages/min keeps per-message cost negligible. |
+| consumed by another component on the same box | **local bus (Channel 1)** | no cloud hop, no cost; lowest latency. |
+
+Rule of thumb: **volume and intent**. High-rate + analytics → streaming; low-rate + actionable →
+the IoT Core control plane; in-edge → the local bus.
+
+### Streaming option reference (verified against the schema)
+
+Each stream needs at least `name` + `sink`; always declare a `buffer` too (a durable `disk` buffer
+needs a `path`; omit `path` only for an in-memory buffer). `batch`/`delivery` are optional tuning.
+
+| Option | Definition |
+|--------|-----------|
+| `streams[].name` | Stream identifier (the handle for `gg.streams().stream(name)`). |
+| `sink` (kinesis) | `{ "type": "kinesis", "streamName", "region"?, "endpointUrl"? }` — `streamName` supports template vars; `endpointUrl` overrides the endpoint (LocalStack/floci/VPC). |
+| `sink` (kafka) | `{ "type": "kafka", "bootstrapServers", "topic", "properties"? }` — `properties` is an open map of librdkafka producer props. |
+| `buffer.type` | `disk` (durable, file-backed, needs `path`) or `memory` (non-durable RAM ring). Default `disk`. |
+| `buffer.path` | Buffer directory (disk only; supports template vars). |
+| `buffer.segmentBytes` / `maxDiskBytes` / `maxAgeSecs` | Segment size, on-disk backlog cap (default ~1 GiB), optional age cap. |
+| `buffer.onFull` | `dropOldest` (default) / `block` / `rejectNew` when the backlog hits `maxDiskBytes`. |
+| `buffer.fsync` / `fsyncIntervalMs` | Durability flush policy (`always` / `perBatch` / `interval`). |
+| `buffer.maxBufferedRecords` | In-flight record cap (default 10000). |
+| `batch.maxRecords` / `maxBytes` / `maxLatencyMs` | Export batch size / byte / latency triggers (defaults 500 / 4 MiB / 1000 ms). |
+| `batch.compression` | `none` (default) or `zstd`. |
+| `delivery.maxRetries` | `-1` = retry forever (durable backlog never drops on transient cloud failure). |
+| `delivery.backoffBaseMs` / `backoffMaxMs` / `pollIntervalMs` | Export retry/poll backoff. |
+
+For local testing, point the sink at floci: `"sink": { "type": "kinesis", "streamName": "telemetry",
+"region": "us-east-1", "endpointUrl": "http://localhost:4566" }`.
+
+---
+
+## 4. Serial RTU and RTU-over-TCP
 
 The adapter supports three transports — `tcp`, `rtu` (serial line), and `rtutcp` (RTU framing over a
 TCP socket, for serial-to-Ethernet gateways). The tag/type/poll model is identical across all three;
@@ -114,8 +551,7 @@ only the `connection` block changes.
 }
 ```
 
-**RTU-over-TCP** (same RTU framing, but reached through a gateway's IP:port — swap only the
-`connection`):
+**RTU-over-TCP** (same RTU framing, reached through a gateway's IP:port — swap only the `connection`):
 
 ```jsonc
 "connection": { "transport": "rtutcp", "host": "10.0.0.200", "port": 502, "unitId": 5, "timeoutMs": 1500 }
@@ -126,27 +562,27 @@ only the `connection` block changes.
 | Option | Effect |
 |--------|--------|
 | `transport: rtu` | Builds a `ModbusSerialClient` with the RTU framer. `host`/`port` are ignored; `serialPort` is required. |
-| `transport: rtutcp` | Builds a `ModbusTcpClient` but with the **RTU** framer over the socket — the right choice for a serial-to-Ethernet gateway that wraps raw RTU frames. Uses `host`/`port`, ignores `serialPort`. |
+| `transport: rtutcp` | Builds a `ModbusTcpClient` with the **RTU** framer over the socket — the right choice for a serial-to-Ethernet gateway that wraps raw RTU frames. Uses `host`/`port`, ignores `serialPort`. |
 | `serialPort` | OS serial device path/name (`/dev/ttyUSB0`, `COM3`). RTU only. |
 | `baudRate` | Line speed (default `9600`). Must match the device exactly or every frame fails to decode. |
 | `parity` | `N`/`E`/`O` (default `N`). Must match the device. |
 | `stopBits` | `1` or `2` (default `1`). Must match the device. |
 | `byteSize` | Bits per character (default `8`). |
 | `unitId` | The RTU slave address on the bus. On a multidrop RTU line each device has a distinct id; set it per instance, or per poll group when several slaves share one line/gateway. |
-| `timeoutMs` | Per-request response timeout (default `1000`). Serial lines are slow — raise it (e.g. `1500`) so a legitimate but slow reply isn't counted as an error. A read that exceeds the timeout marks that block's tags `BAD` and increments `readErrors`. |
+| `timeoutMs` | Per-request response timeout (default `1000`). Serial lines are slow — raise it (e.g. `1500`). A read that exceeds it marks the block's tags `BAD` and increments `readErrors`. |
 
 Because a serial line is a single shared medium, **only one request is in flight at a time** and poll
-groups effectively serialize on it. Keep `pollIntervalMs` realistic for the baud rate and the number
-of registers — over-aggressive polling on RTU just queues reads and inflates latency.
+groups effectively serialize on it. Keep `pollIntervalMs` realistic for the baud rate and register
+count — over-aggressive polling on RTU just queues reads and inflates latency.
 
 ---
 
-## 3. Greengrass v2 deployment (IPC)
+## 5. Greengrass v2 deployment (IPC)
 
 On Greengrass the config is the component's `ComponentConfig` and messaging uses Greengrass IPC — no
-`messaging` section and no broker are needed. The config below is the `recipe.yaml`
-`DefaultConfiguration.ComponentConfig`; override `connection` and `pollGroups` for your device in the
-deployment. The component runs `main.py --platform GREENGRASS` (config source defaults to `GG_CONFIG`,
+`messaging` section and no broker. The config below is the `recipe.yaml`
+`DefaultConfiguration.ComponentConfig`; override `connection` and `pollGroups` for your device at
+deploy time. The component runs `main.py --platform GREENGRASS` (config source defaults to `GG_CONFIG`,
 transport to `IPC`).
 
 ```yaml
@@ -184,148 +620,23 @@ ComponentConfiguration:
                   - { name: "Scaled",    table: "holding", address: 40, type: "uint16", scale: 0.1 }
 ```
 
-**What each option does at runtime**
+**What changes vs the other platforms**
 
 | Option | Effect |
 |--------|--------|
 | `--platform GREENGRASS` (in the recipe `Run`) | Selects IPC messaging and `GG_CONFIG` as the config source; publishes route through the Nucleus rather than a broker. The recipe's `accessControl` grants pub/sub on IPC and IoT Core. |
-| `heartbeat.*` | Standard ggcommons heartbeat — periodic CPU/memory/disk system metrics on the given topic via IPC. Independent of Modbus polling. |
-| `metricEmission.target: log` | Routes the adapter's `southbound_health` metric to a rotating log file (vs `messaging`/`cloudwatch`/`prometheus`). `{ComponentFullName}` resolves to the deployed component name. |
-| `global.defaults` | Instance/group defaults inherited when a group omits `pollIntervalMs` / `publishMode` / `maxGap`. |
+| `heartbeat.*` | Standard ggcommons heartbeat — periodic CPU/memory/disk system metrics on the given topic via IPC. Independent of Modbus polling. `destination: ipc` is the local channel. |
+| `metricEmission.target: log` | Routes the `southbound_health` metric to a rotating log file (vs `messaging`/`cloudwatch`/`prometheus`). `{ComponentFullName}` resolves to the deployed component name. |
 | `adapter: "modbus"` | Informational only; echoed as `device.adapter` in every message. |
-| `connection.timeoutMs` | Per-request timeout (default `1000`). |
-| `publish.topic` | Template for published value updates. `{ComponentName}` / `{InstanceId}` / `{tagId}` are substituted (and sanitized) per message; `{tagId}` is the tag `name`. |
-| `publish.batchMs: 0` | Publish each sample immediately (see [§4](#batching-batchms) for batching). |
-| `write.enabled: true` | Subscribes the write topic so external clients can command the device. With `false` (default) the write topic is **not** subscribed and writes are impossible. |
-| `write.topic` / `read.topic` | Topics for the command surface (fire-and-forget writes; request/reply reads). A `…/control/+` topic is always subscribed for `status`/`tags` queries. |
-| tag `scale` | `Scaled` publishes `raw × 0.1` (e.g. raw `123` → `12.3`); applying a scale turns an integer type into a float on the wire. |
+| tag `scale` | `Scaled` publishes `raw × 0.1` (raw `123` → `12.3`); a scaled integer is emitted as a float. |
 
 On startup each instance's `connect()` **blocks and retries every 5 s** until the device answers, so a
-device that is down at deploy time does not crash the component — it logs and keeps trying, and the
-instance becomes ready once connected.
+device down at deploy time does not crash the component — it logs and keeps trying, and the instance
+becomes ready once connected.
 
 ---
 
-## 4. Multiple poll groups, register maps, intervals, function codes, deadband
-
-The real workhorse pattern: split a device's register map into poll groups by **how fast each set of
-values changes** and **how it should be published**. Fast-changing process values poll often with a
-deadband; slow totalizers/diagnostics poll rarely; status bits get their own cadence. Different groups
-can target different `unitId`s behind one gateway.
-
-```jsonc
-{
-  "tags": { "site": "plant1", "line": "5" },
-  "messaging": { "local": { "type": "mqtt", "host": "localhost", "port": 1883 } },
-  "metricEmission": { "target": "messaging", "targetConfig": { "topic": "metrics/{ThingName}/{ComponentName}" } },
-  "component": {
-    "global": { "defaults": { "pollIntervalMs": 1000, "publishMode": "onChange", "maxGap": 4, "batchMs": 0 } },
-    "instances": [
-      {
-        "id": "plc1",
-        "connection": { "transport": "tcp", "host": "10.0.0.50", "port": 502, "unitId": 1, "timeoutMs": 1000 },
-        "publish": { "topic": "southbound/{site}/{ComponentName}/{InstanceId}/{tagId}" },
-        "write":   { "enabled": true },
-        "pollGroups": [
-
-          { "id": "process", "pollIntervalMs": 250, "publishMode": "onChange", "maxGap": 2,
-            "tags": [
-              { "name": "Temperature", "table": "holding", "address": 0, "type": "float32", "scale": 0.1,
-                "deadband": { "type": "absolute", "value": 0.2 } },
-              { "name": "Pressure",    "table": "holding", "address": 2, "type": "float32",
-                "deadband": { "type": "percent", "value": 1.0 } },
-              { "name": "FlowRate",    "table": "holding", "address": 4, "type": "float32" }
-            ] },
-
-          { "id": "totals", "pollIntervalMs": 5000, "publishMode": "always", "maxGap": 8,
-            "tags": [
-              { "name": "EnergyTotal", "table": "input",  "address": 0,  "type": "uint32", "wordOrder": "little" },
-              { "name": "RunHours",    "table": "input",  "address": 2,  "type": "uint32" },
-              { "name": "SerialNo",    "table": "input",  "address": 10, "type": "string", "count": 8 }
-            ] },
-
-          { "id": "status", "pollIntervalMs": 1000, "unitId": 2,
-            "tags": [
-              { "name": "Running",   "table": "coil",     "address": 0, "type": "bool" },
-              { "name": "RemoteMode","table": "discrete", "address": 0, "type": "bool" },
-              { "name": "AlarmHigh", "table": "holding",  "address": 20, "type": "bool", "bit": 0,
-                "topic": "southbound/{site}/alarms/{InstanceId}/{tagId}" },
-              { "name": "AlarmLow",  "table": "holding",  "address": 20, "type": "bool", "bit": 1 }
-            ] }
-        ]
-      }
-    ]
-  }
-}
-```
-
-### How the groups behave
-
-Each poll group runs on **its own daemon thread**, so the `250 ms` `process` loop, the `5000 ms`
-`totals` loop, and the `1000 ms` `status` loop run concurrently and independently.
-
-**`process` (fast, deadband-gated).** Read every 250 ms for fresh control data.
-- `Temperature` decodes a `float32` (registers 0–1), multiplies by `scale 0.1`, and only republishes
-  when it moves at least **0.2** engineering units from the last published value (`deadband absolute`).
-- `Pressure` republishes only when it changes by at least **1.0 percent** of the previous value
-  (`deadband percent`). When the previous value is `0`, percent can't be computed so any change
-  publishes.
-- `FlowRate` has no deadband, so under `onChange` it republishes on any change.
-- The three tags are contiguous (`0–5`), so with `maxGap 2` the coalescer merges them into **one**
-  `read_holding_registers(0, count=6)` per poll instead of three reads.
-
-**`totals` (slow, always).** Read every 5 s; `publishMode: always` republishes every poll regardless
-of change — useful for monotonic counters and a steady "still alive" signal.
-- `EnergyTotal` is a `uint32` (registers 0–1) with `wordOrder: little` because this meter stores the
-  low-order register first; without it the value would be word-swapped and wildly wrong.
-- `SerialNo` is a `string` spanning `count: 8` registers (16 UTF-8 bytes, null-trimmed).
-- `RunHours` ends at register 4 and `SerialNo` starts at 10; the gap of 6 is `≤ maxGap 8`, so all
-  three coalesce into **one** `read_input_registers(0, count=18)` — one bus round-trip for the whole
-  group.
-
-**`status` (bits + bit-extraction, different unit).** `unitId: 2` overrides the connection's
-`unitId: 1`, so this group reads a second slave behind the same TCP gateway.
-- `Running` (coil) and `RemoteMode` (discrete) decode single bits to booleans; they live on different
-  tables so they are read with separate function-code calls (coalescing is per-table).
-- `AlarmHigh`/`AlarmLow` extract bits 0 and 1 of the **same** holding register 20 with `bit`, surfacing
-  packed status word bits as individual booleans. Both reads come from one register read.
-- `AlarmHigh` overrides its publish topic with a per-tag `topic`, so it goes to an alarms topic while
-  the rest of the group uses the instance `publish.topic`.
-
-### Option → runtime effect
-
-| Option | Effect on runtime behavior |
-|--------|---------------------------|
-| `pollGroups[].pollIntervalMs` | The cadence of one full read-decode-publish pass for the group. Set per the data's rate of change; faster = fresher but more bus load and more messages. The loop subtracts its own work time so the period is honored (it never drifts later by the read duration). |
-| `pollGroups[].publishMode: onChange` | A decoded value is published only if it passes its `deadband` vs the last published value (first read always publishes). Cuts message volume on steady signals. |
-| `pollGroups[].publishMode: always` | Every poll publishes, change or not. Use for counters/totalizers or a heartbeat-style feed. |
-| `pollGroups[].unitId` | Overrides `connection.unitId` for this group — the way to address multiple slaves behind one TCP/RTU-TCP gateway or one RTU line from a single instance. |
-| `pollGroups[].maxGap` | Largest address gap (in registers/bits) the coalescer will bridge to merge two tags into one read. `0` = only strictly contiguous tags merge; higher = fewer, larger reads (less protocol overhead) at the cost of reading some unused registers. Each merged block is still capped at the protocol max (125 registers, 2000 bits). |
-| tag `type` (`float32`,`uint32`,`int16`,…) | Determines how many registers the tag spans and how the raw words are interpreted (see [data-types](reference/data-types.md)). |
-| tag `wordOrder` / `byteOrder` | Reorder the registers/bytes before decode. `big`/`big` (default) = ABCD; the four combinations cover ABCD/BADC/CDAB/DCBA. Wrong order = correct magnitude class but garbled value. |
-| tag `scale` / `offset` | Linear transform `value = raw × scale + offset` on read (inverted on write). Converts raw counts to engineering units; a scaled integer is emitted as a float. |
-| tag `bit` (0–15) | Publishes a single bit of a holding/input register as a boolean. Only valid with `type: bool` on a register table. |
-| tag `count` | Number of registers a `string` spans (2 UTF-8 bytes each). Required for `string`. |
-| tag `deadband` | Per-tag change filter applied under `onChange`: `none` (any change), `absolute` (`|new−old| ≥ value`), `percent` (`|new−old| ≥ value%` of old). Non-numeric tags (bool/string) publish on any change regardless of type. |
-| tag `topic` | Per-tag override of `publish.topic` — route specific tags (e.g. alarms) to their own topic. |
-
-### Batching (`batchMs`)
-
-`batchMs` (under `publish`, or `global.defaults`) controls message coalescing across time:
-
-```jsonc
-"publish": { "topic": "southbound/{site}/{ComponentName}/{InstanceId}/{tagId}", "batchMs": 1000 }
-```
-
-- `batchMs: 0` (default) — every sample publishes immediately as its own `SouthboundTagUpdate`.
-- `batchMs > 0` — samples are buffered per tag and flushed together on a timer every `batchMs`, so one
-  message can carry several `samples` for a tag. This trades freshness/latency for far fewer, larger
-  messages — useful on constrained uplinks. The device's flush tick is `batchMs` (or 5 s when batching
-  is off); it also drives the periodic `southbound_health` emission.
-
----
-
-## 5. Kubernetes (ConfigMap)
+## 6. Kubernetes (ConfigMap)
 
 On Kubernetes the config is mounted as a **directory** (the whole ConfigMap volume) at `/etc/ggcommons`;
 the `CONFIGMAP` source watches the kubelet `..data` symlink swap and **hot-reloads in process** on
@@ -347,6 +658,7 @@ data:
       "messaging": {
         "local": { "type": "mqtt", "host": "emqx.default.svc.cluster.local", "port": 1883, "clientId": "modbus-adapter" }
       },
+      "metricEmission": { "target": "prometheus", "targetConfig": { "port": 9090, "path": "/metrics" } },
       "component": {
         "global": { "defaults": { "pollIntervalMs": 1000, "publishMode": "onChange", "maxGap": 8 } },
         "instances": [
@@ -372,14 +684,15 @@ data:
 
 | Aspect | Effect |
 |--------|--------|
-| Config source `CONFIGMAP` | Reads `config.json` from the mounted ConfigMap directory and hot-reloads when you `kubectl apply` a new ConfigMap (the `..data` swap). Editing the map re-applies config without a pod restart. |
+| Config source `CONFIGMAP` | Reads `config.json` from the mounted ConfigMap directory and hot-reloads when you `kubectl apply` a new ConfigMap (the `..data` swap) — no pod restart. |
 | `messaging.local.host` | Point at an **in-cluster** broker Service DNS name (`emqx.default.svc.cluster.local`). |
-| `connection.host` | Point at the device/gateway's **Service** or reachable address (`modbus-sim.default.svc.cluster.local`) — the adapter runs in-cluster, so the device must be reachable from the pod network. |
+| `connection.host` | Point at the device/gateway's **Service** or reachable address — the adapter runs in-cluster, so the device must be reachable from the pod network. |
 | Identity (no `-t`) | The Thing name resolves from the Downward API (`GGCOMMONS_THING_NAME` ▸ `POD_NAME`), so `{ThingName}` in topics is the pod name unless overridden. |
-| Health/metrics ports | The Deployment exposes the library's HTTP health endpoint (`/startupz`, `/livez`, `/readyz`) for k8s probes; `metricEmission.target: prometheus` can expose `/metrics` for scraping. |
+| `metricEmission.target: prometheus` | Exposes the `southbound_health` metric as OpenMetrics text at `:9090/metrics` for scraping (the default metric target on KUBERNETES). |
+| Health/probes | The Deployment exposes the library's HTTP health endpoint (`/startupz`, `/livez`, `/readyz`) for k8s probes. |
 
-The polling, type, deadband, and command behavior are identical to the other platforms — only the
-config source, broker/device addressing, and identity differ.
+Polling, type, deadband, and command behavior are identical to the other platforms — only the config
+source, broker/device addressing, identity, and metric target differ.
 
 ---
 
@@ -405,9 +718,9 @@ shortens (never lengthens) the next sleep — the configured cadence is the ceil
 ### Decoding raw registers (`type` / `wordOrder` / `byteOrder` / `scale` / `bit`)
 
 Modbus carries only bits and 16-bit registers; richer types are synthesized in `codec.py`. A read
-block's registers are sliced per tag, then assembled into the value: `wordOrder` orders the registers
-(big = most-significant first; little = reversed), `byteOrder` orders the bytes within each register,
-and the `type`'s width decides how many registers are consumed. `scale`/`offset` then apply the linear
+block's registers are sliced per tag, then assembled: `wordOrder` orders the registers (big =
+most-significant first; little = reversed), `byteOrder` orders the bytes within each register, and the
+`type`'s width decides how many registers are consumed. `scale`/`offset` then apply the linear
 transform; `bit` extracts a single bit. If a decode raises (e.g. a malformed string), that tag is
 published with quality `BAD` and the rest of the block continues.
 
@@ -418,6 +731,16 @@ tag's `deadband` and only republished if it passes — the first reading after s
 This suppresses noise/jitter so steady signals don't flood the bus. `publishMode: always` bypasses the
 deadband and publishes every poll. `batchMs` is orthogonal: it coalesces whatever was published in a
 window into fewer messages.
+
+### Topic resolution, sanitization, and precedence
+
+A publish topic is `tag.topic` (if set) else the instance `publish.topic` else the built-in
+`southbound/{ComponentName}/{InstanceId}/{tagId}`. The library resolves `{ThingName}`,
+`{ComponentName}`, `{ComponentFullName}`, and custom `tags` keys; the adapter then substitutes
+`{InstanceId}` and `{tagId}`. Every substituted value is **sanitized** — `/`, `+`, `#`, and whitespace
+become `_` — to block topic injection and stray MQTT wildcards. Timing/coalescing keys
+(`pollIntervalMs`, `publishMode`, `maxGap`) resolve **group ▸ instance `defaults` ▸ `global.defaults` ▸
+built-in**; `batchMs` resolves from `publish` ▸ instance/`global` `defaults`.
 
 ### Reconnect, timeout, and read failures
 
@@ -435,9 +758,9 @@ Polling is the read **plane**. The command surface is separate:
 
 - **Writes** require `write.enabled: true` (otherwise the write topic is never subscribed). A write is
   fire-and-forget to `write.topic` with `{ "writes": [ { "name": "Setpoint", "value": 42.5 } ] }` (or a
-  single `{ "name": …, "value": … }`). Only **writable tables** accept writes — `coil` and `holding`;
-  `discrete`/`input` are rejected with a warning, and `bit` (single-bit) writes are skipped (the
-  read-modify-write is not implemented). `scale`/`offset` are inverted on the way down.
+  single `{ "name": …, "value": … }`). Only **writable tables** accept writes — `coil` (FC5/FC15) and
+  `holding` (FC6/FC16); `discrete`/`input` are rejected with a warning, and `bit` (single-bit) writes
+  are skipped (read-modify-write is not implemented). `scale`/`offset` are inverted on the way down.
 - **Reads** are request/reply on `read.topic` (set `reply_to`/`correlation_id`) and return a
   `SouthboundReadResult` — on-demand, independent of the poll loop.
 - **Control** queries (`…/control/status`, `…/control/tags`) return connection state + counters and the
