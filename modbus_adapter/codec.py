@@ -43,12 +43,12 @@ LITTLE = "little"
 
 
 def register_count(type_: str, count=None) -> int:
-    """Registers spanned by a holding/input tag of the given type (``count`` for ``string``)."""
+    """Registers spanned by a holding/input signal of the given type (``count`` for ``string``)."""
     if type_ == "bool":
         return 1                      # a bool on a register table is one register (a bit of it)
     if type_ == "string":
         if not count:
-            raise ValueError("a 'string' tag requires 'count' (number of registers)")
+            raise ValueError("a 'string' signal requires 'count' (number of registers)")
         return int(count)
     try:
         return _FMT[type_][1]
@@ -151,6 +151,6 @@ def _decode_string(regs, word_order, byte_order) -> str:
 
 def _encode_string(value, count, word_order, byte_order):
     if not count:
-        raise ValueError("a 'string' tag requires 'count' (number of registers)")
+        raise ValueError("a 'string' signal requires 'count' (number of registers)")
     data = str(value).encode("utf-8")[: count * 2].ljust(count * 2, b"\x00")
     return _disassemble(data, word_order, byte_order)

@@ -8,7 +8,7 @@ import re
 from .connection_info import ConnectionInfo
 from .poll_group import PollGroup
 
-_DEFAULT_PUBLISH = "southbound/{ComponentName}/{InstanceId}/{tagId}"
+_DEFAULT_PUBLISH = "southbound/{ComponentName}/{InstanceId}/{signalId}"
 _DEFAULT_WRITE = "southbound/{ComponentName}/{InstanceId}/write"
 _DEFAULT_READ = "southbound/{ComponentName}/{InstanceId}/read"
 _CONTROL = "southbound/{ComponentName}/{InstanceId}/control/+"
@@ -60,10 +60,10 @@ class ServerConfiguration:
         substitute the adapter-specific {InstanceId}."""
         return self._cm.resolve_template(template).replace("{InstanceId}", _sanitize(self.id))
 
-    def resolve_publish_topic(self, override_template, tag_name: str) -> str:
+    def resolve_publish_topic(self, override_template, signal_name: str) -> str:
         template = override_template or self.publish_topic_template
-        return self.resolve_template(template).replace("{tagId}", _sanitize(tag_name))
+        return self.resolve_template(template).replace("{signalId}", _sanitize(signal_name))
 
-    def all_tags(self):
-        """(poll_group, tag) for every configured tag — used by the command/control surfaces."""
-        return [(g, t) for g in self.poll_groups for t in g.tags]
+    def all_signals(self):
+        """(poll_group, signal) for every configured signal — used by the command/control surfaces."""
+        return [(g, s) for g in self.poll_groups for s in g.signals]

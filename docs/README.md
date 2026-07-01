@@ -10,7 +10,7 @@ adapter and the poll-based counterpart to the (Java) OPC UA reference adapter.
 | Doc | Start here when you want to… |
 |-----|------------------------------|
 | **[Tutorial](tutorial.md)** | learn by doing — bring the adapter up against a simulator, end to end |
-| **[How-to guides](how-to-guides.md)** | accomplish a task — define tags, tune rates, read/write, add a second device, deploy |
+| **[How-to guides](how-to-guides.md)** | accomplish a task — define signals, tune rates, read/write, add a second device, deploy |
 | **[Reference](reference/)** | look up an exact option, topic, payload, or type |
 | **[Explanation](explanation.md)** | understand how it works and why — polling, the type layer, the two planes |
 

@@ -8,7 +8,7 @@ from .connection import ModbusConnection
 from .health import HealthMetrics
 from .metrics import ClientMetrics
 from .poll_manager import PollManager
-from .publisher import TagUpdatePublisher
+from .publisher import SignalUpdatePublisher
 
 LOGGER = logging.getLogger("modbus_adapter.device")
 
@@ -24,7 +24,7 @@ class ModbusDevice:
         self._connection.connect()                      # blocks/retries until connected
         self._health.emit(True)
 
-        self._publisher = TagUpdatePublisher(messaging, config_manager, config)
+        self._publisher = SignalUpdatePublisher(messaging, config_manager, config)
         self._poller = PollManager(self._connection, config, self._publisher, self._counters)
         self._poller.start()
 
