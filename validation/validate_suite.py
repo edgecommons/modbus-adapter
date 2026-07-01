@@ -2,7 +2,7 @@
 
 Covers: write->read-back for every supported type; scale + bit decode; a non-default word-order
 round-trip; addressing by explicit {table,address,type} ref; BAD quality on an illegal address;
-the changing-tag stream; and the control queries. Run the sim + adapter on validation/config.json
+the changing-signal stream; and the control queries. Run the sim + adapter on validation/config.json
 first.
 """
 import json
@@ -43,7 +43,7 @@ def on_message(c, u, msg):
 
 
 def updates():
-    return [(t, p) for t, p in msgs if p.get("header", {}).get("name") == "SouthboundTagUpdate"]
+    return [(t, p) for t, p in msgs if p.get("header", {}).get("name") == "SouthboundSignalUpdate"]
 
 
 def request(c, topic, body, timeout=5):
@@ -62,8 +62,8 @@ def request(c, topic, body, timeout=5):
 
 
 def read_entries(c, read_topic, refs):
-    rp = request(c, read_topic, {"tags": refs})
-    return {e["tag"]["address"]["address"]: e for e in (rp.get("body", {}).get("reads", []) if rp else [])}
+    rp = request(c, read_topic, {"signals": refs})
+    return {e["signal"]["address"]["address"]: e for e in (rp.get("body", {}).get("reads", []) if rp else [])}
 
 
 def main():
@@ -115,20 +115,20 @@ def main():
     check("explicit-ref read (input)", e is not None and e.get("quality") == "GOOD", f"{(e or {}).get('value')}")
 
     # --- BAD quality on an illegal address -------------------------------------------------
-    rp = request(c, read_topic, {"tags": [{"unitId": 1, "table": "holding", "address": 9999, "type": "uint16"}]})
+    rp = request(c, read_topic, {"signals": [{"unitId": 1, "table": "holding", "address": 9999, "type": "uint16"}]})
     reads = rp.get("body", {}).get("reads", []) if rp else []
     check("BAD on illegal address", len(reads) == 1 and reads[0].get("quality") == "BAD",
           f"{reads[0].get('quality') if reads else 'no reply'}")
 
     # --- changing stream + control ---------------------------------------------------------
-    cvals = {json.dumps(s.get("value")) for _, p in updates() if p["body"]["tag"]["name"] == "Counter16"
+    cvals = {json.dumps(s.get("value")) for _, p in updates() if p["body"]["signal"]["name"] == "Counter16"
              for s in p["body"]["samples"]}
     check("changing stream", len(cvals) >= 2, f"{len(cvals)} distinct")
     st = request(c, f"southbound/{comp}/{inst}/control/status", {})
     check("status connected", bool((st.get("body", {}) if st else {}).get("connected")))
-    tg = request(c, f"southbound/{comp}/{inst}/control/tags", {})
-    names = {t.get("name") for t in (tg.get("body", {}).get("tags", []) if tg else [])}
-    check("tags query complete", set(WRITES).issubset(names), f"{len(names)} tags")
+    tg = request(c, f"southbound/{comp}/{inst}/control/signals", {})
+    names = {t.get("name") for t in (tg.get("body", {}).get("signals", []) if tg else [])}
+    check("signals query complete", set(WRITES).issubset(names), f"{len(names)} signals")
 
     c.loop_stop()
     c.disconnect()

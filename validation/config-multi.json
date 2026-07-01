@@ -12,12 +12,12 @@
         "id": "plc1",
         "adapter": "modbus",
         "connection": { "transport": "tcp", "host": "127.0.0.1", "port": 5020, "unitId": 1, "timeoutMs": 1000 },
-        "publish": { "topic": "southbound/{site}/{ComponentName}/{InstanceId}/{tagId}", "batchMs": 0 },
+        "publish": { "topic": "southbound/{site}/{ComponentName}/{InstanceId}/{signalId}", "batchMs": 0 },
         "write": { "enabled": true, "topic": "southbound/{ComponentName}/{InstanceId}/write" },
         "read": { "topic": "southbound/{ComponentName}/{InstanceId}/read" },
         "pollGroups": [
           { "id": "g", "pollIntervalMs": 500,
-            "tags": [
+            "signals": [
               { "name": "Counter16", "table": "holding", "address": 0, "type": "uint16" },
               { "name": "Scaled", "table": "holding", "address": 40, "type": "uint16", "scale": 0.1 }
             ] }
@@ -27,12 +27,12 @@
         "id": "plc2",
         "adapter": "modbus",
         "connection": { "transport": "tcp", "host": "127.0.0.1", "port": 5021, "unitId": 1, "timeoutMs": 1000 },
-        "publish": { "topic": "southbound/{site}/{ComponentName}/{InstanceId}/{tagId}", "batchMs": 0 },
+        "publish": { "topic": "southbound/{site}/{ComponentName}/{InstanceId}/{signalId}", "batchMs": 0 },
         "write": { "enabled": true, "topic": "southbound/{ComponentName}/{InstanceId}/write" },
         "read": { "topic": "southbound/{ComponentName}/{InstanceId}/read" },
         "pollGroups": [
           { "id": "g", "pollIntervalMs": 500,
-            "tags": [
+            "signals": [
               { "name": "Counter16", "table": "holding", "address": 0, "type": "uint16" },
               { "name": "Scaled", "table": "holding", "address": 40, "type": "uint16", "scale": 0.1 }
             ] }

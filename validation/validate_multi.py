@@ -32,7 +32,7 @@ def on_message(c, u, msg):
 
 
 def updates():
-    return [p for _, p in msgs if p.get("header", {}).get("name") == "SouthboundTagUpdate"]
+    return [p for _, p in msgs if p.get("header", {}).get("name") == "SouthboundSignalUpdate"]
 
 
 def by_instance(inst):
@@ -85,8 +85,8 @@ def main():
             comp = parts[2]
             break
     if comp:
-        r1 = request(c, f"southbound/{comp}/plc1/read", {"tags": [{"name": "Counter16"}]})
-        r2 = request(c, f"southbound/{comp}/plc2/read", {"tags": [{"name": "Counter16"}]})
+        r1 = request(c, f"southbound/{comp}/plc1/read", {"signals": [{"name": "Counter16"}]})
+        r2 = request(c, f"southbound/{comp}/plc2/read", {"signals": [{"name": "Counter16"}]})
         check("plc1 read routes", bool(r1) and r1["body"]["reads"][0]["quality"] == "GOOD")
         check("plc2 read routes", bool(r2) and r2["body"]["reads"][0]["quality"] == "GOOD")
     else:

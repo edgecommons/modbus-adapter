@@ -26,8 +26,8 @@ ggcommons sections.
 |-----|------|---------|-----------|
 | `pollIntervalMs` | number | `1000` | Fallback poll interval for a group. |
 | `publishMode` | string | `onChange` | `onChange` (publish when the value changes past its deadband) or `always` (every poll). |
-| `batchMs` | number | `0` | If `>0`, buffer a tag's samples and publish one message per `batchMs`; `0` = publish each immediately. |
-| `maxGap` | number | `0` | Max address gap the poller will bridge when coalescing tags into one Modbus read. |
+| `batchMs` | number | `0` | If `>0`, buffer a signal's samples and publish one message per `batchMs`; `0` = publish each immediately. |
+| `maxGap` | number | `0` | Max address gap the poller will bridge when coalescing signals into one Modbus read. |
 
 ## `component.instances[]`
 
@@ -37,10 +37,10 @@ ggcommons sections.
 | `adapter` | string | Informational; echoed as `device.adapter` (`"modbus"`). |
 | `connection` | object | Transport + endpoint (below). |
 | `defaults` | object | Per-instance overrides of `global.defaults`. |
-| `publish` | object | `topic` (template, default `southbound/{ComponentName}/{InstanceId}/{tagId}`), `batchMs`. |
+| `publish` | object | `topic` (template, default `southbound/{ComponentName}/{InstanceId}/{signalId}`), `batchMs`. |
 | `write` | object | `enabled` (default `false`), `topic`. |
 | `read` | object | `topic` for on-demand reads. |
-| `pollGroups` | array | Groups of tags polled together (below). |
+| `pollGroups` | array | Groups of signals polled together (below). |
 
 ### `connection`
 
@@ -49,7 +49,7 @@ ggcommons sections.
 | `transport` | string | `tcp` | `tcp`, `rtu` (serial), or `rtutcp` (RTU framing over TCP). |
 | `host` | string | `127.0.0.1` | TCP / RTU-over-TCP host. |
 | `port` | number | `502` | TCP / RTU-over-TCP port. |
-| `unitId` | number | `1` | Default Modbus unit/slave id (overridable per poll group / tag-ref). |
+| `unitId` | number | `1` | Default Modbus unit/slave id (overridable per poll group / signal-ref). |
 | `timeoutMs` | number | `1000` | Request timeout. |
 | `serialPort` | string | — | RTU only, e.g. `COM3` / `/dev/ttyUSB0`. |
 | `baudRate`, `parity`, `stopBits`, `byteSize` | — | `9600`, `N`, `1`, `8` | RTU serial line settings. |
@@ -58,18 +58,18 @@ ggcommons sections.
 
 | Key | Type | Default | Definition |
 |-----|------|---------|-----------|
-| `id` | string | random | Group id (logs + the `tags` control query). |
+| `id` | string | random | Group id (logs + the `signals` control query). |
 | `pollIntervalMs` | number | instance default | How often this group is read. |
 | `unitId` | number | connection `unitId` | Modbus unit id for this group's reads. |
 | `publishMode` | string | instance default | `onChange` / `always`. |
 | `maxGap` | number | instance default | Coalescing gap (registers/bits). |
-| `tags` | array | `[]` | The tags (below). |
+| `signals` | array | `[]` | The signals (below). |
 
-### Tag (entries of `pollGroups[].tags`)
+### Signal (entries of `pollGroups[].signals`)
 
 | Key | Type | Default | Definition |
 |-----|------|---------|-----------|
-| `name` | string | **required** | Human name; the `{tagId}` topic variable and the friendly write/read ref. |
+| `name` | string | **required** | Human name; the `{signalId}` topic variable and the friendly write/read ref. |
 | `table` | string | **required** | `coil` / `discrete` / `holding` / `input`. |
 | `address` | number | **required** | 0-based PDU register/bit address. |
 | `type` | string | `uint16` (bool for bit tables) | See [data-types.md](data-types.md). |
@@ -78,16 +78,16 @@ ggcommons sections.
 | `bit` | number | — | Extract one bit (0–15) of a holding/input register as a bool. |
 | `scale` / `offset` | number | — | Linear transform on numeric values. |
 | `deadband` | object | `{type:"none"}` | `type`: `none`/`absolute`/`percent`; `value`: number. Gates `onChange` publishing. |
-| `topic` | string | inherits `publish.topic` | Per-tag publish-topic override. |
+| `topic` | string | inherits `publish.topic` | Per-signal publish-topic override. |
 
 ## Template variables
 
-`{ThingName}`, `{ComponentName}`, `{ComponentFullName}`, `{InstanceId}`, `{tagId}` (the tag name), and
+`{ThingName}`, `{ComponentName}`, `{ComponentFullName}`, `{InstanceId}`, `{signalId}` (the signal name), and
 any key under top-level `tags` (e.g. `{site}`) — substituted into topic templates (sanitized).
 
 ## Precedence
 
-`pollIntervalMs` / `publishMode` / `maxGap` resolve: **tag/group value ▸ instance `defaults` ▸
+`pollIntervalMs` / `publishMode` / `maxGap` resolve: **signal/group value ▸ instance `defaults` ▸
 `global.defaults` ▸ built-in**.
 
 ## Complete example
@@ -103,12 +103,12 @@ any key under top-level `tags` (e.g. `{site}`) — substituted into topic templa
       {
         "id": "plc1", "adapter": "modbus",
         "connection": { "transport": "tcp", "host": "10.0.0.50", "port": 502, "unitId": 1 },
-        "publish": { "topic": "southbound/{site}/{ComponentName}/{InstanceId}/{tagId}", "batchMs": 0 },
+        "publish": { "topic": "southbound/{site}/{ComponentName}/{InstanceId}/{signalId}", "batchMs": 0 },
         "write":   { "enabled": true, "topic": "southbound/{ComponentName}/{InstanceId}/write" },
         "read":    { "topic": "southbound/{ComponentName}/{InstanceId}/read" },
         "pollGroups": [
           { "id": "fast", "pollIntervalMs": 500,
-            "tags": [
+            "signals": [
               { "name": "Temperature", "table": "holding", "address": 0, "type": "float32", "scale": 0.1,
                 "deadband": { "type": "absolute", "value": 0.2 } },
               { "name": "Setpoint", "table": "holding", "address": 2, "type": "float32" },
@@ -124,6 +124,6 @@ any key under top-level `tags` (e.g. `{site}`) — substituted into topic templa
 
 ## Accepted but not implemented
 
-- **Single-bit writes** (a `bit` tag) require a read-modify-write and are skipped with a warning.
+- **Single-bit writes** (a `bit` signal) require a read-modify-write and are skipped with a warning.
 - **Modbus security** (Modbus/TLS): not supported — classic Modbus is plaintext; secure the network
   instead (there is no credential/cert handling).

@@ -1,9 +1,9 @@
 """The command surface over messaging: batch write, on-demand batch read (request/reply), and the
-status / tags control queries. Mirrors the OPC UA CommandService.
+status / signals control queries. Mirrors the OPC UA CommandService.
 
-A tag-ref is either ``{"name": "<configured tag>"}`` (friendly, stable) or an explicit
+A signal-ref is either ``{"name": "<configured signal>"}`` (friendly, stable) or an explicit
 ``{"unitId?, table, address, type, ...}`` for arbitrary access — the Modbus analog of OPC UA's
-``namespaceUri``-or-``ns`` + ``tagId``.
+``namespaceUri``-or-``ns`` + ``signalId``.
 """
 import logging
 from datetime import datetime, timezone
@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from ggcommons.messaging.message_builder import MessageBuilder
 
 from . import codec
-from .config.tag_spec import TagSpec
+from .config.signal_spec import SignalSpec
 
 LOGGER = logging.getLogger("modbus_adapter.command")
 
@@ -28,7 +28,7 @@ class CommandService:
         self._config = config
         self._counters = counters
         self._poller = poller
-        self._by_name = {t.name: (g, t) for (g, t) in config.all_tags()}
+        self._by_name = {s.name: (g, s) for (g, s) in config.all_signals()}
 
     def subscribe(self):
         if self._config.write_enabled:
@@ -39,43 +39,43 @@ class CommandService:
 
     # --- resolution -------------------------------------------------------------------------
     def _resolve(self, ref):
-        """Return (TagSpec, unit_id) for a tag-ref, or raise ValueError if unresolvable."""
+        """Return (SignalSpec, unit_id) for a signal-ref, or raise ValueError if unresolvable."""
         name = ref.get("name")
         if name and name in self._by_name:
-            group, tag = self._by_name[name]
-            return tag, group.unit_id
+            group, signal = self._by_name[name]
+            return signal, group.unit_id
         if "table" in ref and "address" in ref:
             unit = int(ref.get("unitId", self._conn.conn.unit_id))
             spec = dict(ref)
             spec.setdefault("name", f"{ref['table']}:{ref['address']}")
-            return TagSpec.from_dict(spec), unit
-        raise ValueError(f"unresolvable tag-ref (need a known 'name' or explicit table+address): {ref}")
+            return SignalSpec.from_dict(spec), unit
+        raise ValueError(f"unresolvable signal-ref (need a known 'name' or explicit table+address): {ref}")
 
-    def _read_one(self, tag, unit):
-        data = self._conn.read(tag.table, tag.address, tag.unit_length(), unit)
-        return codec.decode(tag.table, data, type_=tag.type, word_order=tag.word_order,
-                            byte_order=tag.byte_order, scale=tag.scale, offset=tag.offset,
-                            count=tag.count, bit=tag.bit)
+    def _read_one(self, signal, unit):
+        data = self._conn.read(signal.table, signal.address, signal.unit_length(), unit)
+        return codec.decode(signal.table, data, type_=signal.type, word_order=signal.word_order,
+                            byte_order=signal.byte_order, scale=signal.scale, offset=signal.offset,
+                            count=signal.count, bit=signal.bit)
 
     # --- handlers ---------------------------------------------------------------------------
     def _handle_read(self, topic, request):
         try:
             body = _body(request)
             reads = []
-            for ref in body.get("tags", []):
+            for ref in body.get("signals", []):
                 try:
-                    tag, unit = self._resolve(ref)
+                    signal, unit = self._resolve(ref)
                 except ValueError as e:
-                    LOGGER.warning("[%s] read tag skipped: %s", self._config.id, e)
+                    LOGGER.warning("[%s] read signal skipped: %s", self._config.id, e)
                     continue
-                tag_obj = {"id": tag.tag_id(unit), "address": tag.address_dict(unit)}
+                signal_obj = {"id": signal.signal_id(unit), "address": signal.address_dict(unit)}
                 try:
-                    value, quality, raw = self._read_one(tag, unit), "GOOD", "Good"
+                    value, quality, raw = self._read_one(signal, unit), "GOOD", "Good"
                 except Exception as e:  # noqa: BLE001
                     value, quality, raw = None, "BAD", (str(e) or "read error")
                     self._counters.increment_read_error()
                 self._counters.increment_read()
-                reads.append({"tag": tag_obj, "value": value, "quality": quality,
+                reads.append({"signal": signal_obj, "value": value, "quality": quality,
                               "qualityRaw": raw, "sourceTs": None, "serverTs": _now_iso()})
             self._reply(request, "SouthboundReadResult", {"id": self._config.id, "reads": reads})
         except Exception as e:  # noqa: BLE001
@@ -90,28 +90,28 @@ class CommandService:
                     LOGGER.warning("[%s] write entry missing 'value'; skipping: %s", self._config.id, w)
                     continue
                 try:
-                    tag, unit = self._resolve(w)
+                    signal, unit = self._resolve(w)
                 except ValueError as e:
                     LOGGER.warning("[%s] write entry skipped: %s", self._config.id, e)
                     continue
-                if tag.table not in codec.WRITABLE_TABLES:
-                    LOGGER.warning("[%s] table '%s' is read-only; skipping %s", self._config.id, tag.table, tag.name)
+                if signal.table not in codec.WRITABLE_TABLES:
+                    LOGGER.warning("[%s] table '%s' is read-only; skipping %s", self._config.id, signal.table, signal.name)
                     continue
-                if tag.type == "bool" and tag.bit is not None:
+                if signal.type == "bool" and signal.bit is not None:
                     LOGGER.warning("[%s] bit writes (read-modify-write) not supported; skipping %s",
-                                   self._config.id, tag.name)
+                                   self._config.id, signal.name)
                     continue
                 try:
-                    enc = codec.encode(tag.table, w["value"], type_=tag.type, word_order=tag.word_order,
-                                       byte_order=tag.byte_order, scale=tag.scale, offset=tag.offset,
-                                       count=tag.count)
-                    if tag.table == codec.COIL:
-                        self._conn.write_coil(tag.address, enc, unit)
+                    enc = codec.encode(signal.table, w["value"], type_=signal.type, word_order=signal.word_order,
+                                       byte_order=signal.byte_order, scale=signal.scale, offset=signal.offset,
+                                       count=signal.count)
+                    if signal.table == codec.COIL:
+                        self._conn.write_coil(signal.address, enc, unit)
                     else:
-                        self._conn.write_registers(tag.address, enc, unit)
+                        self._conn.write_registers(signal.address, enc, unit)
                     self._counters.increment_write()
                 except Exception as e:  # noqa: BLE001
-                    LOGGER.error("[%s] write to %s failed: %s", self._config.id, tag.name, e)
+                    LOGGER.error("[%s] write to %s failed: %s", self._config.id, signal.name, e)
         except Exception as e:  # noqa: BLE001
             LOGGER.error("[%s] write request failed: %s", self._config.id, e)
 
@@ -119,8 +119,8 @@ class CommandService:
         if topic.endswith("status"):
             self._reply(request, "status", {"id": self._config.id,
                         "connected": self._conn.is_connected(), "metrics": self._counters.to_dict()})
-        elif topic.endswith("tags") or topic.endswith("subscriptions"):
-            self._reply(request, "tags", {"id": self._config.id, "tags": self._poller.resolved_tags()})
+        elif topic.endswith("signals") or topic.endswith("subscriptions"):
+            self._reply(request, "signals", {"id": self._config.id, "signals": self._poller.resolved_signals()})
 
     def _reply(self, request, name, payload):
         reply = (MessageBuilder.create(name, "1.0")

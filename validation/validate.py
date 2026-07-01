@@ -1,9 +1,9 @@
 """Data-plane smoke test for the Modbus adapter against the pymodbus simulator over EMQX.
 
-  A: poll -> SouthboundTagUpdate for a changing tag (GOOD, Modbus address shape).
+  A: poll -> SouthboundSignalUpdate for a changing signal (GOOD, Modbus address shape).
   B: on-demand read by name (Scaled -> 25.0 via scale; Alarm3 -> True via bit extract).
   C: write round-trip (int16 / float32 / string / coil), confirmed by reading back.
-  D: control plane (status, tags).
+  D: control plane (status, signals).
 """
 import json
 import sys
@@ -34,13 +34,13 @@ def on_message(c, u, msg):
 
 
 def updates():
-    return [(t, p) for t, p in msgs if p.get("header", {}).get("name") == "SouthboundTagUpdate"]
+    return [(t, p) for t, p in msgs if p.get("header", {}).get("name") == "SouthboundSignalUpdate"]
 
 
 def samples_for(name):
     out = []
     for _, p in updates():
-        if p.get("body", {}).get("tag", {}).get("name") == name:
+        if p.get("body", {}).get("signal", {}).get("name") == name:
             out.extend(p["body"]["samples"])
     return out
 
@@ -63,8 +63,8 @@ def request(c, topic, body, timeout=5):
 def reads_by_name(reply):
     out = {}
     for e in (reply.get("body", {}).get("reads", []) if reply else []):
-        # tag.id is "u1/holding/40/uint16"; key by the address tuple via id is fine, but we match by name
-        out.setdefault(e["tag"]["address"].get("address"), e)
+        # signal.id is "u1/holding/40/uint16"; key by the address tuple via id is fine, but we match by name
+        out.setdefault(e["signal"]["address"].get("address"), e)
     return out
 
 
@@ -75,7 +75,7 @@ def main():
     c.connect(BROKER_HOST, BROKER_PORT, 60)
     c.loop_start()
 
-    print("[*] waiting up to 30s for SouthboundTagUpdate...", flush=True)
+    print("[*] waiting up to 30s for SouthboundSignalUpdate...", flush=True)
     deadline = time.time() + 30
     while time.time() < deadline and len(updates()) < 3:
         time.sleep(0.5)
@@ -90,12 +90,12 @@ def main():
     write_topic = f"southbound/{comp}/{inst}/write"
     print(f"[*] component={comp} instance={inst}", flush=True)
 
-    # A: changing tag + envelope shape
+    # A: changing signal + envelope shape
     counter_vals = {json.dumps(s.get("value")) for s in samples_for("Counter16")}
-    a_addr = next((p["body"]["tag"]["address"] for _, p in updates()
-                   if p["body"]["tag"]["name"] == "Counter16"), {})
+    a_addr = next((p["body"]["signal"]["address"] for _, p in updates()
+                   if p["body"]["signal"]["name"] == "Counter16"), {})
     a_dev = next((p["body"]["device"] for _, p in updates()), {})
-    check("changing tag (Counter16)", len(counter_vals) >= 2, f"{len(counter_vals)} distinct")
+    check("changing signal (Counter16)", len(counter_vals) >= 2, f"{len(counter_vals)} distinct")
     check("envelope adapter=modbus", a_dev.get("adapter") == "modbus", f"{a_dev}")
     check("address shape", a_addr.get("table") == "holding" and a_addr.get("unitId") == 1
           and a_addr.get("type") == "uint16", f"{a_addr}")
@@ -103,7 +103,7 @@ def main():
     check("quality GOOD", quals == {"GOOD"}, f"{quals}")
 
     # B: on-demand read by name (scale + bit)
-    rp = request(c, read_topic, {"tags": [{"name": "Scaled"}, {"name": "Alarm3"}]})
+    rp = request(c, read_topic, {"signals": [{"name": "Scaled"}, {"name": "Alarm3"}]})
     by_addr = reads_by_name(rp)
     check("read Scaled == 25.0", abs((by_addr.get(40) or {}).get("value", 0) - 25.0) < 1e-6,
           f"{(by_addr.get(40) or {}).get('value')}")
@@ -116,9 +116,9 @@ def main():
     c.publish(write_topic, json.dumps({"header": {"name": "w", "correlation_id": str(uuid.uuid4())},
                                        "tags": {}, "body": {"writes": writes}}))
     time.sleep(1.5)
-    rp = request(c, read_topic, {"tags": [{"name": "RWInt16"}, {"name": "RWFloat32"},
-                                          {"name": "RWString"}, {"name": "RunCmd"}]})
-    got = {e["tag"]["address"]["address"]: e.get("value") for e in (rp.get("body", {}).get("reads", []) if rp else [])}
+    rp = request(c, read_topic, {"signals": [{"name": "RWInt16"}, {"name": "RWFloat32"},
+                                             {"name": "RWString"}, {"name": "RunCmd"}]})
+    got = {e["signal"]["address"]["address"]: e.get("value") for e in (rp.get("body", {}).get("reads", []) if rp else [])}
     check("write int16 -1234", got.get(10) == -1234, f"{got.get(10)}")
     check("write float32 12.5", abs((got.get(24) or 0) - 12.5) < 1e-6, f"{got.get(24)}")
     check("write string 'hello'", got.get(30) == "hello", f"{got.get(30)}")
@@ -128,9 +128,9 @@ def main():
     st = request(c, f"southbound/{comp}/{inst}/control/status", {})
     sb = st.get("body", {}) if st else {}
     check("status connected", bool(sb.get("connected")) and "metrics" in sb, f"{sb.get('connected')}")
-    tg = request(c, f"southbound/{comp}/{inst}/control/tags", {})
-    names = {t.get("name") for t in (tg.get("body", {}).get("tags", []) if tg else [])}
-    check("tags query", {"Counter16", "Scaled", "RWInt16"}.issubset(names), f"{len(names)} tags")
+    tg = request(c, f"southbound/{comp}/{inst}/control/signals", {})
+    names = {t.get("name") for t in (tg.get("body", {}).get("signals", []) if tg else [])}
+    check("signals query", {"Counter16", "Scaled", "RWInt16"}.issubset(names), f"{len(names)} signals")
 
     c.loop_stop()
     c.disconnect()

@@ -1,7 +1,7 @@
 # Reference — Data Types
 
 Modbus carries only **bits** (coils, discrete inputs) and **16-bit registers** (holding, input). This
-adapter *synthesizes* richer types from those primitives. Every tag declares its `type` (and, for
+adapter *synthesizes* richer types from those primitives. Every signal declares its `type` (and, for
 multi-register types, byte/word order); the adapter assembles registers into the value on read and
 splits the value back into registers on write. All conversion is in `modbus_adapter/codec.py`.
 
@@ -54,11 +54,11 @@ bytes are laid out. Two independent knobs cover the four real-world layouts:
 
 ## Published identity
 
-Each `SouthboundTagUpdate` / read result carries:
+Each `SouthboundSignalUpdate` / read result carries:
 
-- `tag.name` — the configured tag name (also the `{tagId}` topic variable).
-- `tag.id` — a stable canonical id, `u<unitId>/<table>/<address>/<type>` (e.g. `u1/holding/24/float32`).
-- `tag.address` — the protocol-native handle: `{ unitId, table, address, type, wordOrder?, byteOrder?, bit?, count? }`.
+- `signal.name` — the configured signal name (also the `{signalId}` topic variable).
+- `signal.id` — a stable canonical id, `u<unitId>/<table>/<address>/<type>` (e.g. `u1/holding/24/float32`).
+- `signal.address` — the protocol-native handle: `{ unitId, table, address, type, wordOrder?, byteOrder?, bit?, count? }`.
 
 ## Value typing notes
 

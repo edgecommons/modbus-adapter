@@ -3,7 +3,7 @@
 The **Python reference** southbound protocol adapter, built on the `ggcommons`
 (`greengrass-commons`) library and the southbound contract (`docs/SOUTHBOUND.md` in the ggcommons
 monorepo). It bridges **Modbus** devices — TCP, serial RTU, and RTU-over-TCP — onto a message bus:
-it polls register maps and republishes value changes as `SouthboundTagUpdate` messages, serves
+it polls register maps and republishes value changes as `SouthboundSignalUpdate` messages, serves
 on-demand reads and writes, and emits the `southbound_health` metric. It runs wherever you deploy it
 — a Greengrass v2 component, a standalone process, or a Kubernetes pod.
 

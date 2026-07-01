@@ -14,13 +14,13 @@
         "id": "plc1",
         "adapter": "modbus",
         "connection": { "transport": "tcp", "host": "127.0.0.1", "port": 5020, "unitId": 1, "timeoutMs": 1000 },
-        "publish": { "topic": "southbound/{site}/{ComponentName}/{InstanceId}/{tagId}", "batchMs": 0 },
+        "publish": { "topic": "southbound/{site}/{ComponentName}/{InstanceId}/{signalId}", "batchMs": 0 },
         "write": { "enabled": true, "topic": "southbound/{ComponentName}/{InstanceId}/write" },
         "read": { "topic": "southbound/{ComponentName}/{InstanceId}/read" },
         "pollGroups": [
           {
             "id": "main", "pollIntervalMs": 500, "unitId": 1, "publishMode": "onChange", "maxGap": 4,
-            "tags": [
+            "signals": [
               { "name": "Counter16", "table": "holding", "address": 0, "type": "uint16" },
               { "name": "Temp", "table": "holding", "address": 1, "type": "float32", "deadband": { "type": "absolute", "value": 0.1 } },
               { "name": "InCounter", "table": "input", "address": 0, "type": "uint16" },

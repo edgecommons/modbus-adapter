@@ -2,7 +2,7 @@
 
 Bridges Modbus TCP / RTU / RTU-over-TCP devices onto the GGCommons messaging bus using the
 southbound contract (docs/SOUTHBOUND.md): polls register maps and republishes value changes as
-``SouthboundTagUpdate`` messages, serves on-demand batch reads and batch writes, and emits the
+``SouthboundSignalUpdate`` messages, serves on-demand batch reads and batch writes, and emits the
 ``southbound_health`` metric.
 """
 

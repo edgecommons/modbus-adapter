@@ -1,4 +1,4 @@
-"""Client-side change/deadband policy for a polled tag."""
+"""Client-side change/deadband policy for a polled signal."""
 
 NONE = "none"
 ABSOLUTE = "absolute"

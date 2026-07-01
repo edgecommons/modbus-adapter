@@ -5,13 +5,13 @@ For concepts see [explanation.md](explanation.md); for exhaustive options see [r
 
 ---
 
-## Define a register map (tags)
+## Define a register map (signals)
 
-Modbus has no discovery — you declare every tag. Put tags in a poll group on the instance:
+Modbus has no discovery — you declare every signal. Put signals in a poll group on the instance:
 
 ```jsonc
 "pollGroups": [
-  { "id": "process", "pollIntervalMs": 500, "tags": [
+  { "id": "process", "pollIntervalMs": 500, "signals": [
     { "name": "Temperature", "table": "holding", "address": 0, "type": "float32", "scale": 0.1 },
     { "name": "Running",     "table": "coil",    "address": 0, "type": "bool" },
     { "name": "FaultBit2",   "table": "holding", "address": 10, "type": "bool", "bit": 2 }
@@ -29,7 +29,7 @@ Modbus has no discovery — you declare every tag. Put tags in a poll group on t
 
 ## Match the device's number format
 
-If 32/64-bit values come out wrong (byte-swapped or word-swapped), set the order on the tag:
+If 32/64-bit values come out wrong (byte-swapped or word-swapped), set the order on the signal:
 
 ```jsonc
 { "name": "Energy", "table": "holding", "address": 20, "type": "uint32", "wordOrder": "little" }
@@ -45,18 +45,18 @@ The four combinations of `wordOrder` × `byteOrder` cover ABCD/BADC/CDAB/DCBA. T
 | You want… | Set |
 |-----------|-----|
 | Faster/slower polling | `pollGroups[].pollIntervalMs` |
-| Publish only on real change | `publishMode: "onChange"` (default) + a `deadband` per tag |
+| Publish only on real change | `publishMode: "onChange"` (default) + a `deadband` per signal |
 | Publish every poll | `publishMode: "always"` |
 | Drop sensor jitter | `deadband: { "type": "absolute", "value": 0.5 }` (or `percent`) |
-| Fewer, larger messages | `publish.batchMs > 0` (coalesce a tag's samples per interval) |
-| Fewer Modbus reads | raise `maxGap` so nearby tags merge into one read block |
+| Fewer, larger messages | `publish.batchMs > 0` (coalesce a signal's samples per interval) |
+| Fewer Modbus reads | raise `maxGap` so nearby signals merge into one read block |
 
-The poller already merges contiguous tags of the same table into single reads (capped at 125
-registers / 2000 bits); `maxGap` lets it bridge small holes between tags.
+The poller already merges contiguous signals of the same table into single reads (capped at 125
+registers / 2000 bits); `maxGap` lets it bridge small holes between signals.
 
 ---
 
-## Read and write tags from a client
+## Read and write signals from a client
 
 **Write** (needs `write.enabled: true`) — fire-and-forget:
 ```
@@ -67,11 +67,11 @@ payload: { "writes": [ { "name": "Setpoint", "value": 42.5 } ] }
 **Read** — request/reply (set `reply_to` + `correlation_id`):
 ```
 publish   southbound/<ComponentName>/<InstanceId>/read
-          { "header": { "reply_to": "app/r", "correlation_id": "7" }, "body": { "tags": [ { "name": "Temperature" } ] } }
+          { "header": { "reply_to": "app/r", "correlation_id": "7" }, "body": { "signals": [ { "name": "Temperature" } ] } }
 subscribe app/r   → SouthboundReadResult
 ```
 
-Address a tag by `name` (a configured tag) or explicitly by
+Address a signal by `name` (a configured signal) or explicitly by
 `{ unitId?, table, address, type, wordOrder?, scale?, … }` for arbitrary access. Read-only tables
 (`discrete`/`input`) reject writes. Full schemas: [messaging reference](reference/messaging-interface.md).
 
@@ -102,7 +102,7 @@ instance.
 ```
 
 For a serial-to-Ethernet gateway that speaks RTU framing over a socket, use
-`"transport": "rtutcp"` with `host`/`port`. The tag/type/poll model is identical across transports.
+`"transport": "rtutcp"` with `host`/`port`. The signal/type/poll model is identical across transports.
 
 ---
 
@@ -122,5 +122,5 @@ the Downward API).
 
 - **Metric** `southbound_health` (`connectionState`, `readErrors`) flows to `metricEmission.target`.
 - **Status query:** request/reply on `…/control/status` → `{ connected, metrics }`.
-- **Tags query:** request/reply on `…/control/tags` → the resolved tag list with addresses.
+- **Signals query:** request/reply on `…/control/signals` → the resolved signal list with addresses.
 - **Logs:** each subsystem logs under its own name with the `[<instanceId>]` prefix.

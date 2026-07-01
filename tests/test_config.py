@@ -4,7 +4,7 @@ import pytest
 from modbus_adapter.config.connection_info import ConnectionInfo
 from modbus_adapter.config.deadband_spec import DeadbandSpec
 from modbus_adapter.config.server_configuration import ServerConfiguration
-from modbus_adapter.config.tag_spec import TagSpec
+from modbus_adapter.config.signal_spec import SignalSpec
 
 
 class FakeCM:
@@ -24,24 +24,24 @@ class FakeCM:
                  .replace("{site}", "site1"))
 
 
-# --- TagSpec ---------------------------------------------------------------------------------
-def test_tagspec_valid_and_helpers():
-    t = TagSpec.from_dict({"name": "Temp", "table": "holding", "address": 4, "type": "float32",
-                           "scale": 0.1, "wordOrder": "little"})
+# --- SignalSpec ------------------------------------------------------------------------------
+def test_signalspec_valid_and_helpers():
+    t = SignalSpec.from_dict({"name": "Temp", "table": "holding", "address": 4, "type": "float32",
+                              "scale": 0.1, "wordOrder": "little"})
     assert t.unit_length() == 2
-    assert t.tag_id(2) == "u2/holding/4/float32"
+    assert t.signal_id(2) == "u2/holding/4/float32"
     assert t.address_dict(2) == {"unitId": 2, "table": "holding", "address": 4, "type": "float32",
                                  "wordOrder": "little", "byteOrder": "big"}
 
 
-def test_tagspec_coil_and_bit_lengths():
-    coil = TagSpec.from_dict({"name": "Run", "table": "coil", "address": 0})
+def test_signalspec_coil_and_bit_lengths():
+    coil = SignalSpec.from_dict({"name": "Run", "table": "coil", "address": 0})
     assert coil.type == "bool" and coil.unit_length() == 1
-    bittag = TagSpec.from_dict({"name": "Alarm", "table": "holding", "address": 10, "type": "bool", "bit": 3})
-    assert bittag.unit_length() == 1
-    assert bittag.address_dict(1)["bit"] == 3
-    strtag = TagSpec.from_dict({"name": "Label", "table": "holding", "address": 20, "type": "string", "count": 5})
-    assert strtag.unit_length() == 5
+    bitsig = SignalSpec.from_dict({"name": "Alarm", "table": "holding", "address": 10, "type": "bool", "bit": 3})
+    assert bitsig.unit_length() == 1
+    assert bitsig.address_dict(1)["bit"] == 3
+    strsig = SignalSpec.from_dict({"name": "Label", "table": "holding", "address": 20, "type": "string", "count": 5})
+    assert strsig.unit_length() == 5
 
 
 @pytest.mark.parametrize("bad", [
@@ -53,9 +53,9 @@ def test_tagspec_coil_and_bit_lengths():
     {"name": "x", "table": "coil", "address": 0, "bit": 1},               # bit only on register bool
     {"name": "x", "table": "holding", "address": 0, "type": "int16", "bit": 1},  # bit needs bool
 ])
-def test_tagspec_validation_errors(bad):
+def test_signalspec_validation_errors(bad):
     with pytest.raises(ValueError):
-        TagSpec.from_dict(bad)
+        SignalSpec.from_dict(bad)
 
 
 # --- DeadbandSpec ----------------------------------------------------------------------------
@@ -91,11 +91,11 @@ def test_server_configuration_precedence_and_topics():
         "id": "plc1",
         "connection": {"transport": "tcp", "host": "10.0.0.5", "port": 1502, "unitId": 3},
         "defaults": {"pollIntervalMs": 250},
-        "publish": {"topic": "southbound/{site}/{ComponentName}/{InstanceId}/{tagId}", "batchMs": 100},
+        "publish": {"topic": "southbound/{site}/{ComponentName}/{InstanceId}/{signalId}", "batchMs": 100},
         "write": {"enabled": True},
         "pollGroups": [{
             "id": "g1", "pollIntervalMs": 500,
-            "tags": [{"name": "Temp", "table": "holding", "address": 0, "type": "float32", "scale": 0.1}],
+            "signals": [{"name": "Temp", "table": "holding", "address": 0, "type": "float32", "scale": 0.1}],
         }],
     }
     glob = {"defaults": {"pollIntervalMs": 1000, "maxGap": 4, "publishMode": "always"}}
@@ -116,6 +116,6 @@ def test_server_configuration_precedence_and_topics():
     assert g.unit_id == 3                      # inherits connection unit
     assert g.publish_mode == "always"          # inherits server
     assert g.max_gap == 4
-    t = g.tags[0]
+    t = g.signals[0]
     assert sc.resolve_publish_topic(t.topic, t.name) == "southbound/site1/ModbusAdapter/plc1/Temp"
-    assert len(sc.all_tags()) == 1
+    assert len(sc.all_signals()) == 1

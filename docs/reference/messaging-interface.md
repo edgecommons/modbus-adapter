@@ -15,18 +15,18 @@ a bare body object is accepted. Replies are full envelopes. Request/reply sets `
 
 | Plane | Message | Direction | Topic (default) | Reply |
 |-------|---------|-----------|-----------------|-------|
-| data | `SouthboundTagUpdate` | adapter → bus | `southbound/{site}/{ComponentName}/{InstanceId}/{tagId}` | — |
+| data | `SouthboundSignalUpdate` | adapter → bus | `southbound/{site}/{ComponentName}/{InstanceId}/{signalId}` | — |
 | data | write | bus → adapter | `southbound/{ComponentName}/{InstanceId}/write` | — |
 | data | read | bus ↔ adapter | `southbound/{ComponentName}/{InstanceId}/read` | `SouthboundReadResult` |
 | control | status | bus ↔ adapter | `southbound/{ComponentName}/{InstanceId}/control/status` | `status` |
-| control | tags | bus ↔ adapter | `southbound/{ComponentName}/{InstanceId}/control/tags` | `tags` |
+| control | signals | bus ↔ adapter | `southbound/{ComponentName}/{InstanceId}/control/signals` | `signals` |
 | control | `southbound_health` | adapter → metric target | per `metricEmission` | — |
 
 ## Sample object
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `value` | number \| boolean \| string | Per the tag's type (see [data-types.md](data-types.md)). |
+| `value` | number \| boolean \| string | Per the signal's type (see [data-types.md](data-types.md)). |
 | `quality` | string | Normalized `GOOD` \| `BAD` \| `UNCERTAIN`. |
 | `qualityRaw` | string | `Good`, or the Modbus exception / timeout text on failure. |
 | `sourceTs` | null | Modbus has no device timestamp. |
@@ -34,12 +34,12 @@ a bare body object is accepted. Replies are full envelopes. Request/reply sets `
 
 ## Data plane
 
-### `SouthboundTagUpdate` (adapter → bus)
+### `SouthboundSignalUpdate` (adapter → bus)
 
 ```jsonc
 "body": {
   "device": { "adapter": "modbus", "instance": "plc1", "endpoint": "tcp://10.0.0.50:502 unit=1" },
-  "tag": {
+  "signal": {
     "id": "u1/holding/0/float32",
     "name": "Temperature",
     "address": { "unitId": 1, "table": "holding", "address": 0, "type": "float32", "wordOrder": "big", "byteOrder": "big" }
@@ -48,8 +48,8 @@ a bare body object is accepted. Replies are full envelopes. Request/reply sets `
 }
 ```
 
-Published when a polled value changes (`publishMode: onChange`, gated by the tag's `deadband`) or every
-poll (`always`). One message carries one tag's `samples` (one, or many when `publish.batchMs > 0`).
+Published when a polled value changes (`publishMode: onChange`, gated by the signal's `deadband`) or every
+poll (`always`). One message carries one signal's `samples` (one, or many when `publish.batchMs > 0`).
 
 ### write (bus → adapter)
 
@@ -59,28 +59,28 @@ Requires `write.enabled: true`. Fire-and-forget. A single object (no `writes` ar
 "body": { "writes": [ { "name": "Setpoint", "value": 42.5 }, { "ns?": "...", "value": ... } ] }
 ```
 
-A **tag-ref** is either `{ "name": "<configured tag>" }` (friendly; uses that tag's table/type/order)
+A **signal-ref** is either `{ "name": "<configured signal>" }` (friendly; uses that signal's table/type/order)
 or explicit `{ "unitId"?, "table", "address", "type", "wordOrder"?, "byteOrder"?, "scale"?, "offset"?, "count"? }`.
-Entries without `value`, an unresolvable ref, a read-only table (`discrete`/`input`), or a `bit` tag
+Entries without `value`, an unresolvable ref, a read-only table (`discrete`/`input`), or a `bit` signal
 are skipped with a warning. Writes use FC5/FC15 (coil), FC6/FC16 (holding).
 
 ### read (request/reply)
 
 ```jsonc
 // request body
-"body": { "tags": [ { "name": "Temperature" }, { "unitId": 1, "table": "input", "address": 0, "type": "uint16" } ] }
+"body": { "signals": [ { "name": "Temperature" }, { "unitId": 1, "table": "input", "address": 0, "type": "uint16" } ] }
 // reply: header.name = "SouthboundReadResult"
-"body": { "id": "plc1", "reads": [ { "tag": { "id": "...", "address": {...} },
+"body": { "id": "plc1", "reads": [ { "signal": { "id": "...", "address": {...} },
             "value": 21.4, "quality": "GOOD", "qualityRaw": "Good", "sourceTs": null, "serverTs": "..." } ] }
 ```
 
-`reads[i]` corresponds to `tags[i]`; unresolvable refs are omitted (match by `tag`). A node that errors
+`reads[i]` corresponds to `signals[i]`; unresolvable refs are omitted (match by `signal`). A node that errors
 returns an entry with `quality: BAD` and the exception in `qualityRaw`.
 
 ## Control plane
 
 - **status** (`…/control/status`) → `{ "id", "connected", "metrics": { "read": {interval,total}, "write": {interval,total} } }`.
-- **tags** (`…/control/tags`) → `{ "id", "tags": [ { "name", "unitId", "tagId", "address" }, ... ] }` — the configured/polled tags.
+- **signals** (`…/control/signals`) → `{ "id", "signals": [ { "name", "unitId", "signalId", "address" }, ... ] }` — the configured/polled signals.
 
 ### `southbound_health` (metric)
 
