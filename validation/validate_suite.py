@@ -1,9 +1,9 @@
-"""Full type & feature matrix for the Modbus adapter against the simulator over EMQX.
+"""Full type & feature matrix for the Modbus adapter against the simulator over EMQX (UNS).
 
 Covers: write->read-back for every supported type; scale + bit decode; a non-default word-order
 round-trip; addressing by explicit {table,address,type} ref; BAD quality on an illegal address;
-the changing-signal stream; and the control queries. Run the sim + adapter on validation/config.json
-first.
+the changing-signal stream; and the control verbs. Telemetry rides the UNS data class and commands
+ride the main-instance command inbox. Run the sim + adapter on validation/config.json first.
 """
 import json
 import sys
@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 import paho.mqtt.client as mqtt
 
 BROKER_HOST, BROKER_PORT = "localhost", 1883
+REPLY_PREFIX = "modbusval/reply"
 msgs = []
 checks = []
 
@@ -32,7 +33,8 @@ def check(name, ok, detail=""):
 
 
 def on_connect(c, u, f, rc, p=None):
-    c.subscribe("southbound/#")
+    c.subscribe("ecv1/+/+/+/data/#")
+    c.subscribe(f"{REPLY_PREFIX}/#")
 
 
 def on_message(c, u, msg):
@@ -46,12 +48,12 @@ def updates():
     return [(t, p) for t, p in msgs if p.get("header", {}).get("name") == "SouthboundSignalUpdate"]
 
 
-def request(c, topic, body, timeout=5):
+def request(c, cmd_base, verb, body, timeout=5):
     cid = str(uuid.uuid4())
-    reply = f"southbound/reply/{cid}"
-    h = {"name": "req", "version": "1.0", "timestamp": datetime.now(timezone.utc).isoformat(),
+    reply = f"{REPLY_PREFIX}/{cid}"
+    h = {"name": verb, "version": "1.0", "timestamp": datetime.now(timezone.utc).isoformat(),
          "uuid": str(uuid.uuid4()), "correlation_id": cid, "reply_to": reply}
-    c.publish(topic, json.dumps({"header": h, "tags": {}, "body": body}))
+    c.publish(f"{cmd_base}/{verb}", json.dumps({"header": h, "tags": {}, "body": body}))
     deadline = time.time() + timeout
     while time.time() < deadline:
         for t, p in list(msgs):
@@ -61,9 +63,18 @@ def request(c, topic, body, timeout=5):
     return None
 
 
-def read_entries(c, read_topic, refs):
-    rp = request(c, read_topic, {"signals": refs})
-    return {e["signal"]["address"]["address"]: e for e in (rp.get("body", {}).get("reads", []) if rp else [])}
+def result_of(reply):
+    b = (reply or {}).get("body", {})
+    return b.get("result", {}) if b.get("ok") else {}
+
+
+def read_entries(c, cmd_base, inst, refs):
+    rp = request(c, cmd_base, "sb/read", {"instance": inst, "signals": refs})
+    return {e["signal"]["address"]["address"]: e for e in result_of(rp).get("reads", [])}
+
+
+def write(c, cmd_base, inst, writes):
+    return request(c, cmd_base, "sb/write", {"instance": inst, "writes": writes})
 
 
 def main():
@@ -80,16 +91,13 @@ def main():
         print("FAIL: no updates; adapter not running on validation/config.json?", flush=True)
         sys.exit(1)
     parts = updates()[0][0].split("/")
-    comp, inst = parts[2], parts[3]
-    read_topic = f"southbound/{comp}/{inst}/read"
-    write_topic = f"southbound/{comp}/{inst}/write"
+    device, comp, inst = parts[1], parts[2], parts[3]
+    cmd_base = f"ecv1/{device}/{comp}/main/cmd"
 
     # --- write every type, then read back -------------------------------------------------
-    writes = [{"name": n, "value": v} for n, (_, v) in WRITES.items()]
-    c.publish(write_topic, json.dumps({"header": {"name": "w", "correlation_id": str(uuid.uuid4())},
-                                       "tags": {}, "body": {"writes": writes}}))
+    write(c, cmd_base, inst, [{"name": n, "value": v} for n, (_, v) in WRITES.items()])
     time.sleep(1.5)
-    got = read_entries(c, read_topic, [{"name": n} for n in WRITES])
+    got = read_entries(c, cmd_base, inst, [{"name": n} for n in WRITES])
     for name, (addr, val) in WRITES.items():
         e = got.get(addr)
         gv = e.get("value") if e else None
@@ -97,26 +105,26 @@ def main():
         check(f"type {name}", ok, f"wrote {val!r} -> read {gv!r}")
 
     # --- scale + bit decode ----------------------------------------------------------------
-    dec = read_entries(c, read_topic, [{"name": "Scaled"}, {"name": "Alarm3"}])
+    dec = read_entries(c, cmd_base, inst, [{"name": "Scaled"}, {"name": "Alarm3"}])
     check("scale (Scaled==25.0)", abs((dec.get(40) or {}).get("value", 0) - 25.0) < 1e-6)
     check("bit (Alarm3==True)", (dec.get(41) or {}).get("value") is True)
 
     # --- non-default word order round-trip (explicit ref at a free address) ---------------
     lo = {"unitId": 1, "table": "holding", "address": 50, "type": "float32", "wordOrder": "little"}
-    c.publish(write_topic, json.dumps({"header": {"name": "w", "correlation_id": str(uuid.uuid4())},
-                                       "tags": {}, "body": {"writes": [dict(lo, value=7.25)]}}))
+    write(c, cmd_base, inst, [dict(lo, value=7.25)])
     time.sleep(1.0)
-    e = read_entries(c, read_topic, [lo]).get(50)
+    e = read_entries(c, cmd_base, inst, [lo]).get(50)
     check("word-order little round-trip", e is not None and abs(e.get("value", 0) - 7.25) < 1e-6,
           f"{(e or {}).get('value')}")
 
     # --- explicit-address read (by table+address, not name) -------------------------------
-    e = read_entries(c, read_topic, [{"unitId": 1, "table": "input", "address": 0, "type": "uint16"}]).get(0)
+    e = read_entries(c, cmd_base, inst, [{"unitId": 1, "table": "input", "address": 0, "type": "uint16"}]).get(0)
     check("explicit-ref read (input)", e is not None and e.get("quality") == "GOOD", f"{(e or {}).get('value')}")
 
     # --- BAD quality on an illegal address -------------------------------------------------
-    rp = request(c, read_topic, {"signals": [{"unitId": 1, "table": "holding", "address": 9999, "type": "uint16"}]})
-    reads = rp.get("body", {}).get("reads", []) if rp else []
+    rp = request(c, cmd_base, "sb/read",
+                 {"instance": inst, "signals": [{"unitId": 1, "table": "holding", "address": 9999, "type": "uint16"}]})
+    reads = result_of(rp).get("reads", [])
     check("BAD on illegal address", len(reads) == 1 and reads[0].get("quality") == "BAD",
           f"{reads[0].get('quality') if reads else 'no reply'}")
 
@@ -124,15 +132,15 @@ def main():
     cvals = {json.dumps(s.get("value")) for _, p in updates() if p["body"]["signal"]["name"] == "Counter16"
              for s in p["body"]["samples"]}
     check("changing stream", len(cvals) >= 2, f"{len(cvals)} distinct")
-    st = request(c, f"southbound/{comp}/{inst}/control/status", {})
-    check("status connected", bool((st.get("body", {}) if st else {}).get("connected")))
-    tg = request(c, f"southbound/{comp}/{inst}/control/signals", {})
-    names = {t.get("name") for t in (tg.get("body", {}).get("signals", []) if tg else [])}
+    st = request(c, cmd_base, "sb/status", {"instance": inst})
+    check("status connected", bool(result_of(st).get("connected")))
+    tg = request(c, cmd_base, "sb/signals", {"instance": inst})
+    names = {t.get("name") for t in result_of(tg).get("signals", [])}
     check("signals query complete", set(WRITES).issubset(names), f"{len(names)} signals")
 
     c.loop_stop()
     c.disconnect()
-    print("\n================ MODBUS SUITE ================", flush=True)
+    print("\n================ MODBUS SUITE (UNS) ================", flush=True)
     npass = nfail = 0
     for name, ok, detail in checks:
         print(f"  {'PASS' if ok else 'FAIL'}  {name:30} {detail}", flush=True)

@@ -1,14 +1,22 @@
-"""Builds and publishes the Tier-1 ``SouthboundSignalUpdate`` envelope (docs/SOUTHBOUND.md §2).
+"""Builds and publishes the Tier-1 ``SouthboundSignalUpdate`` envelope (docs/SOUTHBOUND.md §2) on the
+instance's UNS ``data`` topic.
 
-With ``batchMs > 0``, samples are buffered per signal and flushed together by :meth:`flush` (driven by
-the device timer); otherwise each sample publishes immediately. Modbus has no device-side timestamp,
-so ``sourceTs`` is null and ``serverTs`` is the adapter's read time.
+Addressing is the Unified Namespace ``data`` class — ``ecv1/{device}/{component}/{instance}/data/{channel}``
+— minted through this instance's UNS topic builder (never a hand-assembled string). The channel token is
+the sanitized signal name; the stable ``signal.id`` and protocol-native ``signal.address`` still travel in
+the body (consumers key on those). Every message is built through the instance-scoped handle, so the
+top-level ``identity`` element is stamped automatically with this instance token (``tags.thing`` is gone).
+
+With ``batchMs > 0``, samples are buffered per signal and flushed together by :meth:`flush` (driven by the
+device timer); otherwise each sample publishes immediately. Modbus has no device-side timestamp, so
+``sourceTs`` is null and ``serverTs`` is the adapter's read time.
 """
 import logging
 import threading
 from datetime import datetime, timezone
 
-from ggcommons.messaging.message_builder import MessageBuilder
+from ggcommons.config.manager.config_manager import ConfigManager
+from ggcommons.uns import UnsClass
 
 LOGGER = logging.getLogger("modbus_adapter.publisher")
 
@@ -18,9 +26,9 @@ def _now_iso() -> str:
 
 
 class SignalUpdatePublisher:
-    def __init__(self, messaging, config_manager, config):
+    def __init__(self, messaging, instance, config):
         self._messaging = messaging          # MessagingClient (static surface)
-        self._cm = config_manager
+        self._instance = instance            # GgInstance handle (gg.instance(config.id))
         self._config = config                # ServerConfiguration
         self._lock = threading.Lock()
         self._pending = {}                   # (unit_id, name) -> [group, signal, [samples]]
@@ -58,8 +66,11 @@ class SignalUpdatePublisher:
                        "address": signal.address_dict(group.unit_id)},
             "samples": samples,
         }
-        msg = MessageBuilder.create("SouthboundSignalUpdate", "1.0").with_payload(body).with_config(self._cm).build()
-        topic = self._config.resolve_publish_topic(signal.topic, signal.name)
+        # UNS data topic, minted + validated through the instance-scoped builder — never hand-assembled.
+        # The channel is the sanitized signal name; signal.id / signal.address stay in the body.
+        topic = self._instance.uns().topic(UnsClass.DATA, ConfigManager.sanitize(signal.name))
+        # new_message() stamps the top-level identity element with this instance token.
+        msg = self._instance.new_message("SouthboundSignalUpdate", "1.0").with_payload(body).build()
         try:
             self._messaging.publish(topic, msg)
         except Exception as e:  # noqa: BLE001 - a publish failure must not kill the poll loop

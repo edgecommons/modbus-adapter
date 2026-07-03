@@ -104,6 +104,21 @@ class PollManager:
                     self._last[key] = value
                     self._publisher.offer(group, signal, self._publisher.make_sample(value))
 
+    def poll_once(self):
+        """Force one synchronous poll of every group now (the ``repoll`` command's action). Reuses
+        the normal poll path, so change/deadband gating and publishing behave exactly as on the
+        timer. Returns the number of groups polled."""
+        polled = 0
+        for group in self._config.poll_groups:
+            if group.id not in self._blocks:           # coalesce lazily if start() hasn't run
+                self._blocks[group.id] = coalesce(group.signals, group.max_gap)
+            try:
+                self._poll_group(group)
+                polled += 1
+            except Exception as e:  # noqa: BLE001 - one bad group must not fail the whole repoll
+                LOGGER.error("[%s] repoll of group '%s' failed: %s", self._config.id, group.id, e)
+        return polled
+
     def resolved_signals(self):
         out = []
         for group in self._config.poll_groups:

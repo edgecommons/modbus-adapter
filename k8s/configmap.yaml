@@ -12,6 +12,7 @@ data:
   config.json: |-
     {
       "logging": { "level": "INFO" },
+      "metricEmission": { "target": "prometheus", "targetConfig": { "port": 9090, "path": "/metrics" } },
       "messaging": {
         "local": { "type": "mqtt", "host": "emqx.default.svc.cluster.local", "port": 1883, "clientId": "modbus-adapter" }
       },
@@ -22,9 +23,8 @@ data:
             "id": "plc1",
             "adapter": "modbus",
             "connection": { "transport": "tcp", "host": "modbus-sim.default.svc.cluster.local", "port": 5020, "unitId": 1, "timeoutMs": 1000 },
-            "publish": { "topic": "southbound/{ComponentName}/{InstanceId}/{signalId}", "batchMs": 0 },
-            "write": { "enabled": true, "topic": "southbound/{ComponentName}/{InstanceId}/write" },
-            "read": { "topic": "southbound/{ComponentName}/{InstanceId}/read" },
+            "publish": { "batchMs": 0 },
+            "write": { "enabled": true },
             "pollGroups": [
               { "id": "main", "pollIntervalMs": 1000,
                 "signals": [

@@ -2,7 +2,6 @@
 retry/backoff, and exposes simple table read/write helpers. (pymodbus 3.x: keyword-only ``count`` and
 ``device_id``; RTU-over-TCP is a TCP client with the RTU framer.)"""
 import logging
-import threading
 import time
 
 from pymodbus import FramerType
@@ -45,6 +44,21 @@ class ModbusConnection:
                 LOGGER.error("[%s] unable to connect to %s: %s. Retrying in %ss...",
                              self.config.id, self.conn.describe(), e, int(RETRY_S))
                 time.sleep(RETRY_S)
+        return self.client
+
+    def reconnect(self):
+        """Drop and re-establish the link with a single (non-blocking) connect attempt — the
+        ``reconnect`` command's action, for when a PLC was power-cycled. Unlike :meth:`connect`
+        (which retries forever), this raises :class:`ModbusError` on a failed attempt so the
+        command can reply with the error."""
+        self.close()
+        self.client = None
+        client = self._create()
+        if not client.connect():
+            raise ModbusError("connect() returned False")
+        self.client = client
+        self._connected = True
+        LOGGER.info("[%s] reconnected to %s", self.config.id, self.conn.describe())
         return self.client
 
     def _create(self):

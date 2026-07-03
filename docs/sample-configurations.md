@@ -2,7 +2,7 @@
 
 Complete, copy-paste-ready configurations for the Modbus adapter
 (`com.mbreissi.modbus.ModbusAdapter`), built up from a trivial dev loop to a realistic,
-multi-table device map with northbound topic mapping, plus how data reaches the cloud —
+multi-table device map placed in the Unified Namespace, plus how data reaches the cloud —
 with an explanation of **what every option does and how it changes runtime behavior**.
 
 These are worked examples. For the exhaustive option list see [reference/configuration.md](reference/configuration.md);
@@ -12,9 +12,14 @@ see [how-to-guides.md](how-to-guides.md); for the message envelopes see
 see [explanation.md](explanation.md).
 
 The adapter loads **one JSON document** from `-c/--config`. The top level may contain `component`
-(required — the adapter) and the standard ggcommons sections `tags`, `messaging`, `metricEmission`,
-`logging`, `heartbeat`, and (opt-in) `streaming`. Timing values resolve **signal/group ▸ instance
-`defaults` ▸ `global.defaults` ▸ built-in**.
+(required — the adapter) and the standard ggcommons sections `tags`, `hierarchy`, `identity`, `topic`,
+`messaging`, `metricEmission`, `logging`, `heartbeat`, and (opt-in) `streaming`. Timing values resolve
+**signal/group ▸ instance `defaults` ▸ `global.defaults` ▸ built-in**.
+
+All topics follow the **Unified Namespace**: `ecv1/{device}/{component}/{instance}/{class}[/channel]`,
+built and validated by the library from the `hierarchy`/`identity` config (there are no per-instance or
+per-signal topic templates). Telemetry rides the `data` class, events `evt`, the command surface the
+`cmd` inbox; the library owns `state`/`metric`/`cfg` automatically.
 
 ---
 
@@ -85,12 +90,12 @@ You can drop the `messaging` section entirely and pass the broker inline instead
 | `logging.level` | Standard ggcommons log level. `INFO` logs connect/poll-group summaries and errors; `DEBUG` adds per-call detail. |
 | `messaging.local.type/host/port` | The transport target for published `SouthboundSignalUpdate` messages. On `HOST` this is the local MQTT broker the adapter connects to (and the same broker your consumers subscribe on). |
 | `messaging.local.clientId` | MQTT client id used for the broker session. Make it unique per process so two adapters don't fight over the same session. |
-| `instances[].id` | Stable instance id. Appears as `{InstanceId}` in topic templates, as `device.instance` in every message, and as the `[plc1]` prefix in logs. |
+| `instances[].id` | Stable instance id. The `{instance}` token of the `data`/`evt` topics, `device.instance` in every message, and the `[plc1]` prefix in logs. |
 | `connection.transport: tcp` | Opens a Modbus/TCP socket to `host:port`. |
 | `connection.host` / `port` | The device endpoint. Default `127.0.0.1:502`. |
 | `connection.unitId` | Default Modbus unit/slave id used for reads/writes unless a poll group or signal-ref overrides it. |
 | `pollGroups[].pollIntervalMs` | How often this group is read end-to-end. `1000` = once per second. Lower = fresher data but more bus traffic. |
-| signal `name` | Required human name; the `{signalId}` topic variable and the friendly handle for reads/writes. |
+| signal `name` | Required human name; the sanitized `data`-class channel token and the friendly handle for reads/writes. |
 | signal `table` | Which Modbus space + function code: `holding`(FC3) / `input`(FC4) registers, `coil`(FC1) / `discrete`(FC2) bits. |
 | signal `address` | **0-based PDU address** (see the convention table above). |
 | signal `type` | How raw registers/bits decode. Register tables default to `uint16`; bit tables are always `bool`. |
@@ -175,11 +180,13 @@ A single 16-bit register packs six status flags. Each is surfaced as its own boo
 ```jsonc
 {
   "tags": { "site": "plant1", "area": "pumphouse", "line": "5" },
+  "hierarchy": { "levels": ["site", "area", "line", "device"] },
+  "identity": { "site": "plant1", "area": "pumphouse", "line": "5" },
   "logging": { "level": "INFO" },
   "messaging": {
     "local": { "type": "mqtt", "host": "localhost", "port": 1883, "clientId": "modbus-skid1" }
   },
-  "metricEmission": { "target": "messaging", "targetConfig": { "topic": "metrics/{ThingName}/{ComponentName}" } },
+  "metricEmission": { "target": "messaging" },
   "component": {
     "global": { "defaults": { "pollIntervalMs": 1000, "publishMode": "onChange", "maxGap": 8, "batchMs": 0 } },
     "instances": [
@@ -187,9 +194,8 @@ A single 16-bit register packs six status flags. Each is surfaced as its own boo
         "id": "skid1",
         "adapter": "modbus",
         "connection": { "transport": "tcp", "host": "10.0.0.50", "port": 502, "unitId": 1, "timeoutMs": 1000 },
-        "publish": { "topic": "southbound/{site}/{ComponentName}/{InstanceId}/{signalId}", "batchMs": 0 },
-        "write":   { "enabled": true, "topic": "southbound/{ComponentName}/{InstanceId}/write" },
-        "read":    { "topic": "southbound/{ComponentName}/{InstanceId}/read" },
+        "publish": { "batchMs": 0 },
+        "write":   { "enabled": true },
         "pollGroups": [
 
           { "id": "process", "pollIntervalMs": 250, "unitId": 1, "publishMode": "onChange", "maxGap": 8,
@@ -203,14 +209,10 @@ A single 16-bit register packs six status flags. Each is surfaced as its own boo
               { "name": "PumpSpeedCmd", "table": "holding", "address": 8, "type": "uint16", "scale": 0.1 },
               { "name": "TempTrim",     "table": "holding", "address": 9, "type": "int16",  "scale": 0.1 },
 
-              { "name": "AlarmHigh",      "table": "holding", "address": 16, "type": "bool", "bit": 0,
-                "topic": "southbound/{site}/alarms/{InstanceId}/{signalId}" },
-              { "name": "AlarmLow",       "table": "holding", "address": 16, "type": "bool", "bit": 1,
-                "topic": "southbound/{site}/alarms/{InstanceId}/{signalId}" },
-              { "name": "OverTemp",       "table": "holding", "address": 16, "type": "bool", "bit": 2,
-                "topic": "southbound/{site}/alarms/{InstanceId}/{signalId}" },
-              { "name": "MotorFault",     "table": "holding", "address": 16, "type": "bool", "bit": 3,
-                "topic": "southbound/{site}/alarms/{InstanceId}/{signalId}" },
+              { "name": "AlarmHigh",      "table": "holding", "address": 16, "type": "bool", "bit": 0 },
+              { "name": "AlarmLow",       "table": "holding", "address": 16, "type": "bool", "bit": 1 },
+              { "name": "OverTemp",       "table": "holding", "address": 16, "type": "bool", "bit": 2 },
+              { "name": "MotorFault",     "table": "holding", "address": 16, "type": "bool", "bit": 3 },
               { "name": "CommError",      "table": "holding", "address": 16, "type": "bool", "bit": 4 },
               { "name": "MaintenanceDue", "table": "holding", "address": 16, "type": "bool", "bit": 5 }
             ] },
@@ -272,7 +274,7 @@ alarm bits all read register `16`. With `maxGap 8` the poller bridges the 6-regi
 - `PumpSpeedCmd`/`TempTrim` are writable; reading them here gives a command **read-back**. `TempTrim`
   is `int16`, so it carries negative trims correctly. Both apply `scale 0.1`, so raw `455` → `45.5`.
 - `AlarmHigh…MaintenanceDue` extract bits `0–5` of the one `StatusWord` register, surfacing packed
-  bits as individual booleans; the four true alarms also override their publish topic (see mapping below).
+  bits as individual booleans (each on its own `data` channel, e.g. `.../data/AlarmHigh`).
 - Had `maxGap` been `< 6` (e.g. the contiguous-only `maxGap: 0`), the `StatusWord` block would not
   merge and the group would issue **two** reads — `read_holding_registers(0, count=10)` and
   `read_holding_registers(16, count=1)`.
@@ -299,29 +301,33 @@ signal. All eight signals are input registers spanning `0–21`; the two 1-regis
 **Net bus load** ≈ `process` 1 read × 4/s + `status` 2 reads × 1/s + `totals` 1 read × 0.2/s ≈ **6.2
 requests/second** across both unit ids on the one socket.
 
-### Northbound topic mapping
+### UNS data-plane topics
 
-Every published `SouthboundSignalUpdate` resolves its topic from `publish.topic` (or a per-signal `topic`
-override), substituting template tokens and **sanitizing** each value (`/`, `+`, `#`, and whitespace →
-`_`). With `publish.topic = southbound/{site}/{ComponentName}/{InstanceId}/{signalId}`, `tags.site =
-plant1`, component `com.mbreissi.modbus.ModbusAdapter`, and instance `skid1`:
+Every `SouthboundSignalUpdate` publishes on the UNS `data` class,
+`ecv1/{device}/ModbusAdapter/{instance}/data/{signal}`, minted and validated by the library — the
+`{signal}` channel is the signal `name` passed through the UNS token sanitizer (`/ + # \`, control
+chars → `_`). With thing name `gw-01`, `hierarchy.levels = [site, area, line, device]`, and instance
+`skid1`:
 
-| Signal (register) | Effective template | Resolved topic |
-|----------------|--------------------|----------------|
-| `Temperature` (holding 0, u1) | instance `publish.topic` | `southbound/plant1/com.mbreissi.modbus.ModbusAdapter/skid1/Temperature` |
-| `EnergyImport` (input 0, u2) | instance `publish.topic` | `southbound/plant1/com.mbreissi.modbus.ModbusAdapter/skid1/EnergyImport` |
-| `RunCmd` (coil 0, u1) | instance `publish.topic` | `southbound/plant1/com.mbreissi.modbus.ModbusAdapter/skid1/RunCmd` |
-| `AlarmHigh` (holding 16 bit 0, u1) | per-signal `topic` override | `southbound/plant1/alarms/skid1/AlarmHigh` |
+| Signal (register) | Resolved topic |
+|----------------|----------------|
+| `Temperature` (holding 0, u1) | `ecv1/gw-01/ModbusAdapter/skid1/data/Temperature` |
+| `EnergyImport` (input 0, u2) | `ecv1/gw-01/ModbusAdapter/skid1/data/EnergyImport` |
+| `RunCmd` (coil 0, u1) | `ecv1/gw-01/ModbusAdapter/skid1/data/RunCmd` |
+| `AlarmHigh` (holding 16 bit 0, u1) | `ecv1/gw-01/ModbusAdapter/skid1/data/AlarmHigh` |
 
-Tokens: `{ThingName}` (the `-t`/identity), `{ComponentName}` and `{ComponentFullName}` (dots are kept —
-only `/ + #` and whitespace are sanitized), `{InstanceId}` (the instance `id`), `{signalId}` (the signal
-`name`), plus any key under top-level `tags` (here `{site}`).
+The enterprise location rides the top-level `identity` element, not the topic (and no longer in
+`tags`): `identity.path = "plant1/pumphouse/5/gw-01"`. A fleet consumer subscribes one wildcard
+`ecv1/+/+/+/data/#` rather than per-signal templates.
 
-**Worked example — `AlarmHigh`.** It reads bit 0 of `StatusWord` on `unitId 1`, and its per-signal
-override routes it to the alarms topic. The resolved topic is
-`southbound/plant1/alarms/skid1/AlarmHigh`, and the body carries the canonical signal identity:
+**Worked example — `AlarmHigh`.** It reads bit 0 of `StatusWord` on `unitId 1`; its topic is
+`ecv1/gw-01/ModbusAdapter/skid1/data/AlarmHigh`, and the message carries the stamped identity plus the
+canonical signal identity in the body:
 
 ```jsonc
+"identity": { "hier": [ {"level":"site","value":"plant1"}, {"level":"area","value":"pumphouse"},
+                        {"level":"line","value":"5"}, {"level":"device","value":"gw-01"} ],
+              "path": "plant1/pumphouse/5/gw-01", "component": "ModbusAdapter", "instance": "skid1" },
 "body": {
   "device": { "adapter": "modbus", "instance": "skid1", "endpoint": "tcp://10.0.0.50:502 unit=1" },
   "signal": {
@@ -329,13 +335,14 @@ override routes it to the alarms topic. The resolved topic is
     "name": "AlarmHigh",
     "address": { "unitId": 1, "table": "holding", "address": 16, "type": "bool", "bit": 0 }
   },
-  "samples": [ { "value": true, "quality": "GOOD", "qualityRaw": "Good", "sourceTs": null, "serverTs": "2026-06-29T01:48:00Z" } ]
+  "samples": [ { "value": true, "quality": "GOOD", "qualityRaw": "Good", "sourceTs": null, "serverTs": "2026-07-03T01:48:00Z" } ]
 }
 ```
 
 `signal.id` is the stable canonical id `u<unitId>/<table>/<address>/<type>`; `signal.address` is the
-protocol-native handle. Both are independent of the topic, so a consumer can key on identity even if
-you re-template topics.
+protocol-native handle. Both are independent of the topic, so a consumer keys on identity regardless of
+addressing. To surface alarm transitions as discrete events (not just polled `data`), consume the
+adapter's `evt/connection`/`evt/write` on `ecv1/+/+/+/evt/#`.
 
 ### Option → runtime effect
 
@@ -344,10 +351,9 @@ you re-template topics.
 | `global.defaults` / instance `defaults` | Fallback `pollIntervalMs` / `publishMode` / `maxGap` / `batchMs` inherited when a group/instance omits them. Resolution order is **group ▸ instance `defaults` ▸ `global.defaults` ▸ built-in**. |
 | `connection.unitId` | Default unit id for the instance; overridden here per-group (`totals` → unit 2). |
 | `connection.timeoutMs` | Per-request response timeout (default `1000`). A read that exceeds it marks that block's signals `BAD` and increments `readErrors`. |
-| `publish.topic` | Template for `SouthboundSignalUpdate` topics; `{…}` tokens are substituted and sanitized per message. |
 | `publish.batchMs` | `0` = publish each sample immediately; `>0` buffers per signal and flushes together (see [batching](#batching-batchms)). Set under `publish` or `defaults`; **not** per poll group. |
-| `write.enabled` | `true` subscribes the write topic so external clients can command the device. `false` (default) leaves it unsubscribed — writes are impossible. |
-| `write.topic` / `read.topic` | The command surface (fire-and-forget writes; request/reply reads). A `…/control/+` topic is always subscribed for `status`/`signals`. |
+| `write.enabled` | `true` lets the `sb/write` command verb write to this device. `false` (default) → `sb/write` replies with a `WRITE_DISABLED` error. |
+| `hierarchy` / `identity` | Place the device in the UNS enterprise tree (envelope `identity`); the last hierarchy level is the resolved thing name = the topic `{device}`. |
 | `pollGroups[].pollIntervalMs` | One full read-decode-publish pass for the group. The loop subtracts its own work time, so a slow read shortens (never lengthens) the next sleep — the configured cadence is the ceiling. |
 | `pollGroups[].unitId` | Overrides `connection.unitId` for this group — addresses multiple slaves behind one TCP/RTU-TCP gateway or RTU line from one instance. |
 | `pollGroups[].publishMode: onChange` | A decoded value publishes only if it passes its `deadband` vs the last published value (the first read always publishes). Cuts message volume on steady signals. |
@@ -360,14 +366,14 @@ you re-template topics.
 | signal `count` | Registers a `string` spans (2 UTF-8 bytes each). Required for `string`. |
 | signal `bit` (0–15) | Publishes a single bit of a holding/input register as a boolean. Only valid with `type: bool` on a register table. Bit *writes* (read-modify-write) are not implemented. |
 | signal `deadband` | Per-signal change filter under `onChange`: `none` (any change), `absolute` (`|new−old| ≥ value`), `percent` (`|new−old| ≥ value%` of old; any change when old is `0`). Non-numeric signals (bool/string) publish on any change. |
-| signal `topic` | Per-signal override of `publish.topic` — route specific signals (e.g. alarms) to their own topic. |
+| signal `name` | The sanitized `data`-class channel token (`.../data/<name>`) and the friendly write/read ref; `signal.id`/`signal.address` in the body are what consumers key on. |
 
 ### Batching (`batchMs`)
 
 `batchMs` (under `publish`, or `global`/instance `defaults`) coalesces messages across time:
 
 ```jsonc
-"publish": { "topic": "southbound/{site}/{ComponentName}/{InstanceId}/{signalId}", "batchMs": 1000 }
+"publish": { "batchMs": 1000 }
 ```
 
 - `batchMs: 0` (default) — every sample publishes immediately as its own `SouthboundSignalUpdate`.
@@ -382,9 +388,10 @@ you re-template topics.
 
 Everything above publishes to the **local bus** — Greengrass IPC on the `GREENGRASS` platform, the
 local MQTT broker on `HOST`/`KUBERNETES`. That is the adapter's data plane: `SignalUpdatePublisher` sends
-every `SouthboundSignalUpdate` with the plain `publish` call, and `CommandService` subscribes the
-write/read/control surface with the plain `subscribe` call — both on the default provider channel
-(the local broker on HOST, IPC on Greengrass). On-box consumers read those topics.
+every `SouthboundSignalUpdate` on the UNS `data` class through the instance-scoped topic builder, and
+the read/write/control surface is served by the library **command inbox**
+(`ecv1/{device}/ModbusAdapter/main/cmd/#`) — both on the default provider channel (the local broker on
+HOST, IPC on Greengrass). On-box consumers read those topics.
 
 **What the adapter sends to the cloud itself.** The one northbound path the adapter wires directly is
 its own *operational* telemetry — the heartbeat and the health metric. The library can deliver them
@@ -411,15 +418,18 @@ metric target set to `destination: "iotcore"`:
   // Heartbeat and health go to IoT Core (low rate); register data stays on the local bus.
   "heartbeat": {
     "intervalSecs": 30,
-    "targets": [ { "type": "messaging", "config": { "destination": "iotcore", "topic": "heartbeat/{ThingName}/{ComponentName}" } } ],
+    "destination": "iotcore",
     "measures": { "cpu": true, "memory": true }
   },
   "metricEmission": {
     "target": "messaging",
-    "targetConfig": { "topic": "southbound/{ThingName}/{ComponentName}/health", "destination": "iotcore" }
+    "targetConfig": { "destination": "iotcore" }
   }
 }
 ```
+
+The heartbeat keepalive rides the UNS `state` class and the metric the `metric` class automatically —
+`destination: iotcore` routes those reserved-class publishes to IoT Core instead of the local broker.
 
 On `GREENGRASS` the same `destination: "iotcore"` routes through the Nucleus' IoT Core connection, so
 `messaging.iotCore` is not needed there.
@@ -516,9 +526,6 @@ ComponentConfiguration:
         python_format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
       heartbeat:
         intervalSecs: 5
-        targets:
-          - type: "messaging"
-            config: { destination: "ipc", topic: "heartbeat/{ThingName}/{ComponentName}" }
         measures: { cpu: true, memory: true, disk: false }
       tags: {}
       metricEmission:
@@ -531,9 +538,8 @@ ComponentConfiguration:
           - id: "plc1"
             adapter: "modbus"
             connection: { transport: "tcp", host: "10.0.0.50", port: 502, unitId: 1, timeoutMs: 1000 }
-            publish: { topic: "southbound/{ComponentName}/{InstanceId}/{signalId}", batchMs: 0 }
-            write:   { enabled: true, topic: "southbound/{ComponentName}/{InstanceId}/write" }
-            read:    { topic: "southbound/{ComponentName}/{InstanceId}/read" }
+            publish: { batchMs: 0 }
+            write:   { enabled: true }
             pollGroups:
               - id: "main"
                 pollIntervalMs: 1000
@@ -547,7 +553,7 @@ ComponentConfiguration:
 | Option | Effect |
 |--------|--------|
 | `--platform GREENGRASS` (in the recipe `Run`) | Selects IPC messaging and `GG_CONFIG` as the config source; publishes route through the Nucleus rather than a broker. The recipe's `accessControl` grants pub/sub on IPC and IoT Core. |
-| `heartbeat.*` | Standard ggcommons heartbeat — periodic CPU/memory/disk system metrics on the given topic via IPC. Independent of Modbus polling. `destination: ipc` is the local channel. |
+| `heartbeat.*` | Standard ggcommons heartbeat — the UNS `state` keepalive (`ecv1/{device}/ModbusAdapter/main/state`) plus CPU/memory/disk `sys` measures. Independent of Modbus polling; `destination` (default `local`) is the local channel on GG IPC. |
 | `metricEmission.target: log` | Routes the `southbound_health` metric to a rotating log file (vs `messaging`/`cloudwatch`/`prometheus`). `{ComponentFullName}` resolves to the deployed component name. |
 | `adapter: "modbus"` | Informational only; echoed as `device.adapter` in every message. |
 | signal `scale` | `Scaled` publishes `raw × 0.1` (raw `123` → `12.3`); a scaled integer is emitted as a float. |
@@ -587,8 +593,8 @@ data:
           {
             "id": "plc1",
             "connection": { "transport": "tcp", "host": "modbus-sim.default.svc.cluster.local", "port": 5020, "unitId": 1, "timeoutMs": 1000 },
-            "publish": { "topic": "southbound/{ComponentName}/{InstanceId}/{signalId}", "batchMs": 0 },
-            "write":   { "enabled": true, "topic": "southbound/{ComponentName}/{InstanceId}/write" },
+            "publish": { "batchMs": 0 },
+            "write":   { "enabled": true },
             "pollGroups": [
               { "id": "main", "pollIntervalMs": 1000,
                 "signals": [
@@ -609,7 +615,7 @@ data:
 | Config source `CONFIGMAP` | Reads `config.json` from the mounted ConfigMap directory and hot-reloads when you `kubectl apply` a new ConfigMap (the `..data` swap) — no pod restart. |
 | `messaging.local.host` | Point at an **in-cluster** broker Service DNS name (`emqx.default.svc.cluster.local`). |
 | `connection.host` | Point at the device/gateway's **Service** or reachable address — the adapter runs in-cluster, so the device must be reachable from the pod network. |
-| Identity (no `-t`) | The Thing name resolves from the Downward API (`GGCOMMONS_THING_NAME` ▸ `POD_NAME`), so `{ThingName}` in topics is the pod name unless overridden. |
+| Identity (no `-t`) | The Thing name resolves from the Downward API (`GGCOMMONS_THING_NAME` ▸ `POD_NAME`), so the `{device}` token of every UNS topic is the pod name unless overridden. |
 | `metricEmission.target: prometheus` | Exposes the `southbound_health` metric as OpenMetrics text at `:9090/metrics` for scraping (the default metric target on KUBERNETES). |
 | Health/probes | The Deployment exposes the library's HTTP health endpoint (`/startupz`, `/livez`, `/readyz`) for k8s probes. |
 
@@ -654,15 +660,16 @@ This suppresses noise/jitter so steady signals don't flood the bus. `publishMode
 deadband and publishes every poll. `batchMs` is orthogonal: it coalesces whatever was published in a
 window into fewer messages.
 
-### Topic resolution, sanitization, and precedence
+### UNS addressing, sanitization, and precedence
 
-A publish topic is `signal.topic` (if set) else the instance `publish.topic` else the built-in
-`southbound/{ComponentName}/{InstanceId}/{signalId}`. The library resolves `{ThingName}`,
-`{ComponentName}`, `{ComponentFullName}`, and custom `tags` keys; the adapter then substitutes
-`{InstanceId}` and `{signalId}`. Every substituted value is **sanitized** — `/`, `+`, `#`, and whitespace
-become `_` — to block topic injection and stray MQTT wildcards. Timing/coalescing keys
-(`pollIntervalMs`, `publishMode`, `maxGap`) resolve **group ▸ instance `defaults` ▸ `global.defaults` ▸
-built-in**; `batchMs` resolves from `publish` ▸ instance/`global` `defaults`.
+A data topic is `ecv1/{device}/ModbusAdapter/{instance}/data/{signal}`, minted and validated by the
+library's UNS builder — `{device}` is the resolved thing name (last `hierarchy` level), `{instance}`
+the device instance id, and `{signal}` the signal `name` passed through the UNS token sanitizer (`/`,
+`+`, `#`, `\`, control chars → `_`; `..` rejected) so a channel token can never inject a level or a
+wildcard. There are no config topic templates. `topic.includeRoot` optionally inserts the site level
+after `ecv1` on a multi-site broker. Timing/coalescing keys (`pollIntervalMs`, `publishMode`, `maxGap`)
+resolve **group ▸ instance `defaults` ▸ `global.defaults` ▸ built-in**; `batchMs` resolves from
+`publish` ▸ instance/`global` `defaults`.
 
 ### Reconnect, timeout, and read failures
 
@@ -672,21 +679,25 @@ its own worker/connection). `connection.timeoutMs` bounds each individual reques
 out, errors, or returns a Modbus exception marks **every signal in that read block** with quality `BAD`
 (value `null`) and increments the `readErrors` counter, while the loop stays alive and retries on the
 next interval. The `southbound_health` metric's `connectionState` (1/0) and `readErrors` reflect this;
-it is emitted to `metricEmission.target` and queryable on the `…/control/status` topic.
+it is emitted to `metricEmission.target` (auto-routing to the UNS `metric` class under `messaging`) and
+queryable via the `sb/status` command verb. A link up/down transition also fires an `evt/connection`
+event immediately.
 
 ### Reads vs writes (the command surface)
 
-Polling is the read **plane**. The command surface is separate:
+Polling is the read **plane**. The command surface is separate — served by the library command inbox
+(`ecv1/{device}/ModbusAdapter/main/cmd/{verb}`), with the target device selected by an `instance` field
+in the request body. Every reply is `{ "ok": true, "result": … }` or `{ "ok": false, "error": … }`.
 
-- **Writes** require `write.enabled: true` (otherwise the write topic is never subscribed). A write is
-  fire-and-forget to `write.topic` with `{ "writes": [ { "name": "Setpoint", "value": 42.5 } ] }` (or a
-  single `{ "name": …, "value": … }`). Only **writable tables** accept writes — `coil` (FC5/FC15) and
-  `holding` (FC6/FC16); `discrete`/`input` are rejected with a warning, and `bit` (single-bit) writes
-  are skipped (read-modify-write is not implemented). `scale`/`offset` are inverted on the way down.
-- **Reads** are request/reply on `read.topic` (set `reply_to`/`correlation_id`) and return a
-  `SouthboundReadResult` — on-demand, independent of the poll loop.
-- **Control** queries (`…/control/status`, `…/control/signals`) return connection state + counters and the
-  resolved signal list.
+- **Writes** (`sb/write`) require `write.enabled: true` (otherwise a `WRITE_DISABLED` error).
+  `{ "writes": [ { "name": "Setpoint", "value": 42.5 } ] }` (or a single `{ "name": …, "value": … }`).
+  Only **writable tables** accept writes — `coil` (FC5/FC15) and `holding` (FC6/FC16); `discrete`/`input`
+  and `bit` (single-bit) writes are reported per-entry as `ok:false`. `scale`/`offset` are inverted on
+  the way down. Each write also emits an `evt/write` audit event.
+- **Reads** (`sb/read`) are request/reply and return `{ id, reads: [...] }` — on-demand, independent of
+  the poll loop.
+- **Control** verbs `sb/status` / `sb/signals` return connection state + counters and the resolved
+  signal list; `reconnect` re-establishes the link and `repoll` forces an immediate poll.
 
 A signal-ref in any command is either `{ "name": "<configured signal>" }` or an explicit
 `{ unitId?, table, address, type, wordOrder?, scale?, … }` for arbitrary access. See

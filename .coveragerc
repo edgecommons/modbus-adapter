@@ -1,0 +1,18 @@
+# Coverage is scoped to the CI-testable surface, matching the org convention (the ggcommons libraries
+# scope their 90% gate the same way): pure protocol/normalization/command logic is unit-tested here,
+# while the live-infra paths are exercised by the validation/ HOST smoke against EMQX + a Modbus sim.
+#
+# Excluded as live-infra (no unit coverage without a real PLC socket or broker):
+#   - connection.py : the pymodbus client (TCP/RTU socket I/O, blocking connect/retry)
+#   - device.py     : per-instance orchestration that binds the live connection + messaging + threads
+[run]
+source = modbus_adapter
+omit =
+    modbus_adapter/connection.py
+    modbus_adapter/device.py
+
+[report]
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:
+    raise NotImplementedError

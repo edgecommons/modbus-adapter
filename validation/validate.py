@@ -1,9 +1,15 @@
-"""Data-plane smoke test for the Modbus adapter against the pymodbus simulator over EMQX.
+"""Data-plane smoke test for the Modbus adapter against the pymodbus simulator over EMQX (UNS).
 
-  A: poll -> SouthboundSignalUpdate for a changing signal (GOOD, Modbus address shape).
-  B: on-demand read by name (Scaled -> 25.0 via scale; Alarm3 -> True via bit extract).
-  C: write round-trip (int16 / float32 / string / coil), confirmed by reading back.
-  D: control plane (status, signals).
+  A: poll -> SouthboundSignalUpdate on the UNS data class (GOOD, Modbus address shape, identity stamped).
+  B: on-demand read by name via the command inbox (Scaled -> 25.0 via scale; Alarm3 -> True via bit).
+  C: write round-trip via the command inbox (int16 / float32 / string / coil), confirmed by reading back,
+     and the resulting evt/write audit event.
+  D: control verbs (sb/status, sb/signals).
+
+Telemetry rides ecv1/{device}/ModbusAdapter/{instance}/data/#; commands ride the main-instance inbox
+ecv1/{device}/ModbusAdapter/main/cmd/{verb} (verbs sb/read, sb/write, sb/status, sb/signals), with the
+target instance carried in the request body. Replies are {"ok":true,"result":...} on the request's
+reply_to.
 """
 import json
 import sys
@@ -14,6 +20,7 @@ from datetime import datetime, timezone
 import paho.mqtt.client as mqtt
 
 BROKER_HOST, BROKER_PORT = "localhost", 1883
+REPLY_PREFIX = "modbusval/reply"
 msgs = []
 checks = []
 
@@ -23,7 +30,9 @@ def check(name, ok, detail=""):
 
 
 def on_connect(c, u, f, rc, p=None):
-    c.subscribe("southbound/#")
+    c.subscribe("ecv1/+/+/+/data/#")       # UNS telemetry (data class)
+    c.subscribe("ecv1/+/+/+/evt/#")        # UNS events (evt class)
+    c.subscribe(f"{REPLY_PREFIX}/#")       # command replies
 
 
 def on_message(c, u, msg):
@@ -37,6 +46,10 @@ def updates():
     return [(t, p) for t, p in msgs if p.get("header", {}).get("name") == "SouthboundSignalUpdate"]
 
 
+def events():
+    return [(t, p) for t, p in msgs if "/evt/" in t]
+
+
 def samples_for(name):
     out = []
     for _, p in updates():
@@ -45,12 +58,13 @@ def samples_for(name):
     return out
 
 
-def request(c, topic, body, timeout=5):
+def request(c, cmd_base, verb, body, timeout=5):
+    """Send a command-inbox request and wait for its {"ok":..,"result":..} reply."""
     cid = str(uuid.uuid4())
-    reply = f"southbound/reply/{cid}"
-    h = {"name": "req", "version": "1.0", "timestamp": datetime.now(timezone.utc).isoformat(),
+    reply = f"{REPLY_PREFIX}/{cid}"
+    h = {"name": verb, "version": "1.0", "timestamp": datetime.now(timezone.utc).isoformat(),
          "uuid": str(uuid.uuid4()), "correlation_id": cid, "reply_to": reply}
-    c.publish(topic, json.dumps({"header": h, "tags": {}, "body": body}))
+    c.publish(f"{cmd_base}/{verb}", json.dumps({"header": h, "tags": {}, "body": body}))
     deadline = time.time() + timeout
     while time.time() < deadline:
         for t, p in list(msgs):
@@ -60,10 +74,14 @@ def request(c, topic, body, timeout=5):
     return None
 
 
-def reads_by_name(reply):
+def result_of(reply):
+    b = (reply or {}).get("body", {})
+    return b.get("result", {}) if b.get("ok") else {}
+
+
+def reads_by_addr(reply):
     out = {}
-    for e in (reply.get("body", {}).get("reads", []) if reply else []):
-        # signal.id is "u1/holding/40/uint16"; key by the address tuple via id is fine, but we match by name
+    for e in result_of(reply).get("reads", []):
         out.setdefault(e["signal"]["address"].get("address"), e)
     return out
 
@@ -75,7 +93,7 @@ def main():
     c.connect(BROKER_HOST, BROKER_PORT, 60)
     c.loop_start()
 
-    print("[*] waiting up to 30s for SouthboundSignalUpdate...", flush=True)
+    print("[*] waiting up to 30s for SouthboundSignalUpdate on the UNS data class...", flush=True)
     deadline = time.time() + 30
     while time.time() < deadline and len(updates()) < 3:
         time.sleep(0.5)
@@ -84,60 +102,69 @@ def main():
         sys.exit(1)
     time.sleep(2)
 
+    # UNS data topic: ecv1/{device}/{component}/{instance}/data/{signal}
     parts = updates()[0][0].split("/")
-    comp, inst = parts[2], parts[3]
-    read_topic = f"southbound/{comp}/{inst}/read"
-    write_topic = f"southbound/{comp}/{inst}/write"
-    print(f"[*] component={comp} instance={inst}", flush=True)
+    device, comp, inst = parts[1], parts[2], parts[3]
+    cmd_base = f"ecv1/{device}/{comp}/main/cmd"     # the main-instance command inbox
+    print(f"[*] device={device} component={comp} instance={inst}", flush=True)
+    check("data class topic", parts[4] == "data", updates()[0][0])
 
-    # A: changing signal + envelope shape
+    # A: changing signal + envelope shape + top-level identity
     counter_vals = {json.dumps(s.get("value")) for s in samples_for("Counter16")}
     a_addr = next((p["body"]["signal"]["address"] for _, p in updates()
                    if p["body"]["signal"]["name"] == "Counter16"), {})
     a_dev = next((p["body"]["device"] for _, p in updates()), {})
+    a_ident = next((p.get("identity") for _, p in updates()), {}) or {}
     check("changing signal (Counter16)", len(counter_vals) >= 2, f"{len(counter_vals)} distinct")
     check("envelope adapter=modbus", a_dev.get("adapter") == "modbus", f"{a_dev}")
+    check("identity stamped (component/instance)",
+          a_ident.get("component") == comp and a_ident.get("instance") == inst, f"{a_ident}")
+    check("no tags.thing", "thing" not in (next((p.get("tags", {}) for _, p in updates()), {}) or {}))
     check("address shape", a_addr.get("table") == "holding" and a_addr.get("unitId") == 1
           and a_addr.get("type") == "uint16", f"{a_addr}")
     quals = {s.get("quality") for s in samples_for("Counter16")}
     check("quality GOOD", quals == {"GOOD"}, f"{quals}")
 
-    # B: on-demand read by name (scale + bit)
-    rp = request(c, read_topic, {"signals": [{"name": "Scaled"}, {"name": "Alarm3"}]})
-    by_addr = reads_by_name(rp)
+    # B: on-demand read by name (scale + bit) via the command inbox
+    rp = request(c, cmd_base, "sb/read", {"instance": inst, "signals": [{"name": "Scaled"}, {"name": "Alarm3"}]})
+    by_addr = reads_by_addr(rp)
     check("read Scaled == 25.0", abs((by_addr.get(40) or {}).get("value", 0) - 25.0) < 1e-6,
           f"{(by_addr.get(40) or {}).get('value')}")
     check("read Alarm3 (bit3) == True", (by_addr.get(41) or {}).get("value") is True,
           f"{(by_addr.get(41) or {}).get('value')}")
 
-    # C: write round-trip
+    # C: write round-trip via the command inbox + the evt/write audit event
     writes = [{"name": "RWInt16", "value": -1234}, {"name": "RWFloat32", "value": 12.5},
               {"name": "RWString", "value": "hello"}, {"name": "RunCmd", "value": True}]
-    c.publish(write_topic, json.dumps({"header": {"name": "w", "correlation_id": str(uuid.uuid4())},
-                                       "tags": {}, "body": {"writes": writes}}))
+    wr = request(c, cmd_base, "sb/write", {"instance": inst, "writes": writes})
+    check("write reply ok", (wr or {}).get("body", {}).get("ok") is True and result_of(wr).get("written") == 4,
+          f"{result_of(wr).get('written')}")
     time.sleep(1.5)
-    rp = request(c, read_topic, {"signals": [{"name": "RWInt16"}, {"name": "RWFloat32"},
-                                             {"name": "RWString"}, {"name": "RunCmd"}]})
-    got = {e["signal"]["address"]["address"]: e.get("value") for e in (rp.get("body", {}).get("reads", []) if rp else [])}
+    rp = request(c, cmd_base, "sb/read", {"instance": inst, "signals": [
+        {"name": "RWInt16"}, {"name": "RWFloat32"}, {"name": "RWString"}, {"name": "RunCmd"}]})
+    got = {e["signal"]["address"]["address"]: e.get("value") for e in result_of(rp).get("reads", [])}
     check("write int16 -1234", got.get(10) == -1234, f"{got.get(10)}")
     check("write float32 12.5", abs((got.get(24) or 0) - 12.5) < 1e-6, f"{got.get(24)}")
     check("write string 'hello'", got.get(30) == "hello", f"{got.get(30)}")
     check("write coil True", got.get(0) is True, f"{got.get(0)}")  # RunCmd is coil address 0
+    wevts = [p for t, p in events() if t.endswith("/evt/write")]
+    check("evt/write emitted", any(e.get("body", {}).get("signal") == "RWInt16" for e in wevts),
+          f"{len(wevts)} write events")
 
-    # D: control
-    st = request(c, f"southbound/{comp}/{inst}/control/status", {})
-    sb = st.get("body", {}) if st else {}
+    # D: control verbs
+    st = request(c, cmd_base, "sb/status", {"instance": inst})
+    sb = result_of(st)
     check("status connected", bool(sb.get("connected")) and "metrics" in sb, f"{sb.get('connected')}")
-    tg = request(c, f"southbound/{comp}/{inst}/control/signals", {})
-    names = {t.get("name") for t in (tg.get("body", {}).get("signals", []) if tg else [])}
+    tg = request(c, cmd_base, "sb/signals", {"instance": inst})
+    names = {t.get("name") for t in result_of(tg).get("signals", [])}
     check("signals query", {"Counter16", "Scaled", "RWInt16"}.issubset(names), f"{len(names)} signals")
 
     c.loop_stop()
     c.disconnect()
-    print("\n================ MODBUS DATA-PLANE ================", flush=True)
+    print("\n================ MODBUS DATA-PLANE (UNS) ================", flush=True)
     npass = nfail = 0
     for name, ok, detail in checks:
-        print(f"  {'PASS' if ok else 'FAIL'}  {name:28} {detail}", flush=True)
+        print(f"  {'PASS' if ok else 'FAIL'}  {name:34} {detail}", flush=True)
         npass += ok
         nfail += not ok
     print(f"\n========== {npass}/{npass + nfail} PASS ({'ALL PASS' if nfail == 0 else str(nfail) + ' FAIL'}) ==========", flush=True)

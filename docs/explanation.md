@@ -11,6 +11,17 @@ read/write command surface, and emits a `southbound_health` metric. The cloud se
 regardless of protocol — only `device.adapter` and the opaque `signal.address` differ. This adapter is
 the **poll-based** reference; OPC UA is the subscribe-based one.
 
+## The Unified Namespace (UNS)
+
+Addressing follows the UNS: every topic is `ecv1/{device}/{component}/{instance}/{class}[/channel]`,
+built and validated by the library — never a hand-assembled string. Telemetry rides the `data` class
+(`ecv1/{device}/ModbusAdapter/{instance}/data/{signal}`); discrete events ride `evt`; the on-demand
+command surface rides the library's `cmd` inbox; and the library owns `state` (a keepalive),
+`metric` (the health + system metrics), and `cfg` automatically. Every message carries a top-level
+**`identity`** element (`{hier, path, component, instance}`) placing the reading in the enterprise
+tree — routing and partitioning never parse the body or the topic. A fleet consumer needs one wildcard
+per class (`ecv1/+/+/+/data/#`, `…/evt/#`, `…/metric/#`, `…/state`), not per-adapter topic templates.
+
 ## Poll, not subscribe
 
 Modbus has no eventing — a device only answers requests. So instead of subscribing, the adapter
@@ -46,11 +57,15 @@ Two consequences worth internalizing:
 
 ## Two planes
 
-- **Data plane** — high-rate, fire-and-forget telemetry: `SouthboundSignalUpdate` out, `write` in.
-- **Control plane** — low-rate request/reply: on-demand `read`, and `status` / `signals` queries.
+- **Data plane** — high-rate, fire-and-forget telemetry: `SouthboundSignalUpdate` out on the `data`
+  class; discrete `evt/connection` and `evt/write` events out on the `evt` class.
+- **Control plane** — low-rate request/reply through the `cmd` inbox: `sb/write`, on-demand `sb/read`,
+  and `sb/status` / `sb/signals` / `reconnect` / `repoll` verbs.
 
-Keeping them separate means a consumer can fire a control query without perturbing the telemetry
-stream, and routing/partitioning can key on the data-plane topic alone.
+Keeping them separate means a consumer can fire a control verb without perturbing the telemetry
+stream, and routing/partitioning can key on the data-plane topic alone. The command inbox is a single
+`main`-instance subscription (`ecv1/{device}/ModbusAdapter/main/cmd/#`); a multi-instance adapter picks
+the target device with an `instance` field in the request body.
 
 ## Quality
 

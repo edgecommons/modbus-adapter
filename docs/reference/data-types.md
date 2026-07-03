@@ -56,7 +56,7 @@ bytes are laid out. Two independent knobs cover the four real-world layouts:
 
 Each `SouthboundSignalUpdate` / read result carries:
 
-- `signal.name` — the configured signal name (also the `{signalId}` topic variable).
+- `signal.name` — the configured signal name (also the sanitized `data`-class channel token).
 - `signal.id` — a stable canonical id, `u<unitId>/<table>/<address>/<type>` (e.g. `u1/holding/24/float32`).
 - `signal.address` — the protocol-native handle: `{ unitId, table, address, type, wordOrder?, byteOrder?, bit?, count? }`.
 

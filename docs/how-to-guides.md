@@ -58,22 +58,31 @@ registers / 2000 bits); `maxGap` lets it bridge small holes between signals.
 
 ## Read and write signals from a client
 
-**Write** (needs `write.enabled: true`) — fire-and-forget:
+Both go through the library **command inbox** (`ecv1/{device}/ModbusAdapter/main/cmd/{verb}`). Set
+`header.name` to the verb, `header.reply_to` + `header.correlation_id` for the reply, and select the
+device with `instance` in the body (optional with one device). The reply is
+`{ "ok": true, "result": … }`.
+
+**Write** (needs `write.enabled: true`):
 ```
-topic:   southbound/<ComponentName>/<InstanceId>/write
-payload: { "writes": [ { "name": "Setpoint", "value": 42.5 } ] }
+publish   ecv1/<device>/ModbusAdapter/main/cmd/sb/write
+          { "header": { "name": "sb/write", "reply_to": "app/r", "correlation_id": "7" },
+            "body": { "instance": "plc1", "writes": [ { "name": "Setpoint", "value": 42.5 } ] } }
+subscribe app/r   → { "ok": true, "result": { "written": 1, "results": [ … ] } }
 ```
 
-**Read** — request/reply (set `reply_to` + `correlation_id`):
+**Read** — request/reply:
 ```
-publish   southbound/<ComponentName>/<InstanceId>/read
-          { "header": { "reply_to": "app/r", "correlation_id": "7" }, "body": { "signals": [ { "name": "Temperature" } ] } }
-subscribe app/r   → SouthboundReadResult
+publish   ecv1/<device>/ModbusAdapter/main/cmd/sb/read
+          { "header": { "name": "sb/read", "reply_to": "app/r", "correlation_id": "8" },
+            "body": { "instance": "plc1", "signals": [ { "name": "Temperature" } ] } }
+subscribe app/r   → { "ok": true, "result": { "id": "plc1", "reads": [ … ] } }
 ```
 
 Address a signal by `name` (a configured signal) or explicitly by
 `{ unitId?, table, address, type, wordOrder?, scale?, … }` for arbitrary access. Read-only tables
-(`discrete`/`input`) reject writes. Full schemas: [messaging reference](reference/messaging-interface.md).
+(`discrete`/`input`) are reported per-entry as `ok:false`. Each write also emits an `evt/write` audit
+event. Full schemas: [messaging reference](reference/messaging-interface.md).
 
 ---
 
@@ -120,7 +129,10 @@ the Downward API).
 
 ## Observe health and status
 
-- **Metric** `southbound_health` (`connectionState`, `readErrors`) flows to `metricEmission.target`.
-- **Status query:** request/reply on `…/control/status` → `{ connected, metrics }`.
-- **Signals query:** request/reply on `…/control/signals` → the resolved signal list with addresses.
+- **Metric** `southbound_health` (`connectionState`, `readErrors`) — with `metricEmission.target:
+  messaging` it auto-publishes on the UNS `metric` class
+  (`ecv1/{device}/ModbusAdapter/main/metric/southbound_health`); `log`/`cloudwatch`/`prometheus` also work.
+- **State keepalive:** the library publishes `ecv1/{device}/ModbusAdapter/main/state` every ~5 s.
+- **Events:** `evt/connection` (link up/down per instance) and `evt/write` (write audit) on the `evt` class.
+- **Status verb:** `sb/status` → `{ connected, metrics }`. **Signals verb:** `sb/signals` → the resolved signal list with addresses.
 - **Logs:** each subsystem logs under its own name with the `[<instanceId>]` prefix.
