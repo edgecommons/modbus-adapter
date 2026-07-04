@@ -335,14 +335,17 @@ canonical signal identity in the body:
     "name": "AlarmHigh",
     "address": { "unitId": 1, "table": "holding", "address": 16, "type": "bool", "bit": 0 }
   },
-  "samples": [ { "value": true, "quality": "GOOD", "qualityRaw": "Good", "sourceTs": null, "serverTs": "2026-07-03T01:48:00Z" } ]
+  "samples": [ { "value": true, "quality": "GOOD", "qualityRaw": "unspecified", "serverTs": "2026-07-03T01:48:00Z" } ]
 }
 ```
 
 `signal.id` is the stable canonical id `u<unitId>/<table>/<address>/<type>`; `signal.address` is the
 protocol-native handle. Both are independent of the topic, so a consumer keys on identity regardless of
-addressing. To surface alarm transitions as discrete events (not just polled `data`), consume the
-adapter's `evt/connection`/`evt/write` on `ecv1/+/+/+/evt/#`.
+addressing. This body is constructed by the library's `data()` facade (not hand-assembled): quality has
+no Modbus-native meaning, so an omitted quality defaults to `GOOD` with the `qualityRaw: "unspecified"`
+marker; `sourceTs` is omitted (never synthesized) since Modbus has no device timestamp. To surface alarm
+transitions as discrete events (not just polled `data`), consume the adapter's severity-segmented
+`evt/critical/connection`/`evt/{info|warning}/write` on `ecv1/+/+/+/evt/#`.
 
 ### Option → runtime effect
 
@@ -388,7 +391,8 @@ adapter's `evt/connection`/`evt/write` on `ecv1/+/+/+/evt/#`.
 
 Everything above publishes to the **local bus** — Greengrass IPC on the `GREENGRASS` platform, the
 local MQTT broker on `HOST`/`KUBERNETES`. That is the adapter's data plane: `SignalUpdatePublisher` sends
-every `SouthboundSignalUpdate` on the UNS `data` class through the instance-scoped topic builder, and
+every `SouthboundSignalUpdate` on the UNS `data` class through the instance's `data()` facade (which
+constructs the body and mints the topic — `docs/platform/DESIGN-class-facades.md` §2.1), and
 the read/write/control surface is served by the library **command inbox**
 (`ecv1/{device}/ModbusAdapter/main/cmd/#`) — both on the default provider channel (the local broker on
 HOST, IPC on Greengrass). On-box consumers read those topics.
@@ -680,8 +684,9 @@ out, errors, or returns a Modbus exception marks **every signal in that read blo
 (value `null`) and increments the `readErrors` counter, while the loop stays alive and retries on the
 next interval. The `southbound_health` metric's `connectionState` (1/0) and `readErrors` reflect this;
 it is emitted to `metricEmission.target` (auto-routing to the UNS `metric` class under `messaging`) and
-queryable via the `sb/status` command verb. A link up/down transition also fires an `evt/connection`
-event immediately.
+queryable via the `sb/status` command verb. A link up/down transition also raises/clears a `critical`
+alarm on `evt/critical/connection` immediately (the same channel for the drop and the restore, so a
+console tracking `evt/critical/#` sees both ends).
 
 ### Reads vs writes (the command surface)
 
@@ -693,7 +698,8 @@ in the request body. Every reply is `{ "ok": true, "result": … }` or `{ "ok": 
   `{ "writes": [ { "name": "Setpoint", "value": 42.5 } ] }` (or a single `{ "name": …, "value": … }`).
   Only **writable tables** accept writes — `coil` (FC5/FC15) and `holding` (FC6/FC16); `discrete`/`input`
   and `bit` (single-bit) writes are reported per-entry as `ok:false`. `scale`/`offset` are inverted on
-  the way down. Each write also emits an `evt/write` audit event.
+  the way down. Each write also emits an `evt/info/write` (success) or `evt/warning/write` (failure)
+  audit event.
 - **Reads** (`sb/read`) are request/reply and return `{ id, reads: [...] }` — on-demand, independent of
   the poll loop.
 - **Control** verbs `sb/status` / `sb/signals` return connection state + counters and the resolved

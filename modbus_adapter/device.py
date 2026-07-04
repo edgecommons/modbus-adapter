@@ -1,11 +1,12 @@
 """Coordinates one Modbus device instance: connection + poll manager + publisher + command service +
 health, plus a tick that flushes batched publishes and emits health. Mirrors OpcUaDevice.
 
-Each device owns a ``gg.instance(id)`` handle: the publisher and event emitter mint this instance's
-UNS ``data``/``evt`` topics through it, and every message it builds is stamped with the top-level
-``identity`` element carrying this instance token. The on-demand command surface (``self.commands``) is
-served through the shared command inbox — ``main.py`` registers the verbs and dispatches into this
-device by the request body's ``instance`` selector; the device no longer subscribes any topic itself.
+Each device owns a ``gg.instance(id)`` handle: the publisher and event emitter publish through this
+instance's ``data()``/``events()`` facades (``docs/platform/DESIGN-class-facades.md``), which mint
+the UNS ``data``/``evt`` topics and stamp the top-level ``identity`` element carrying this instance
+token. The on-demand command surface (``self.commands``) is served through the shared command inbox
+— ``main.py`` registers the verbs and dispatches into this device by the request body's ``instance``
+selector; the device no longer subscribes any topic itself.
 """
 import logging
 import threading
@@ -26,13 +27,12 @@ class ModbusDevice:
         # credentials unused: classic Modbus has no auth (network-level security).
         self._gg = gg
         config_manager = gg.get_config_manager()
-        messaging = gg.get_messaging()
         metrics = gg.get_metrics()
         self.config = config
-        # The instance-scoped handle: its uns() mints this instance's data/evt topics and its
-        # new_message() stamps the config-resolved identity with this instance token.
+        # The instance-scoped handle: its data()/events() facades mint this instance's data/evt
+        # topics and stamp the config-resolved identity with this instance token.
         self._instance = gg.instance(config.id)
-        self._events = EventEmitter(messaging, self._instance)
+        self._events = EventEmitter(self._instance.events())
 
         self._counters = ClientMetrics()
         self._health = HealthMetrics(metrics, config_manager, config.id, self._counters)
@@ -41,10 +41,9 @@ class ModbusDevice:
         self._connection.connect()                      # blocks/retries until connected
         self._connected = True
         self._health.emit(True)
-        self._events.emit("connection", {"instance": config.id, "connected": True,
-                                          "endpoint": config.connection.describe()})
+        self._events.connection(True, {"endpoint": config.connection.describe()})
 
-        self._publisher = SignalUpdatePublisher(messaging, self._instance, config)
+        self._publisher = SignalUpdatePublisher(self._instance.data(), config)
         self._poller = PollManager(self._connection, config, self._publisher, self._counters)
         self._poller.start()
 
@@ -67,8 +66,7 @@ class ModbusDevice:
             self._health.emit(connected)
             if connected != self._connected:
                 self._connected = connected
-                self._events.emit("connection", {"instance": self.config.id, "connected": connected,
-                                                  "endpoint": self.config.connection.describe()})
+                self._events.connection(connected, {"endpoint": self.config.connection.describe()})
 
     def stop(self):
         self._stop.set()

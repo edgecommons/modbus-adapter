@@ -9,6 +9,8 @@ import threading
 import time
 from collections import defaultdict
 
+from ggcommons.facades.quality import Quality
+
 from . import codec
 from .config.poll_group import ALWAYS
 
@@ -85,7 +87,7 @@ class PollManager:
                 raw = str(e) or "read error"
                 for signal in block["signals"]:
                     self._counters.increment_read_error()
-                    self._publisher.offer(group, signal, self._publisher.make_sample(None, "BAD", raw))
+                    self._publisher.offer(group, signal, self._publisher.make_sample(None, Quality.BAD, raw))
                 continue
             for signal in block["signals"]:
                 off = signal.address - block["start"]
@@ -96,7 +98,7 @@ class PollManager:
                                          count=signal.count, bit=signal.bit)
                 except Exception as e:  # noqa: BLE001
                     self._counters.increment_read_error()
-                    self._publisher.offer(group, signal, self._publisher.make_sample(None, "BAD", str(e)))
+                    self._publisher.offer(group, signal, self._publisher.make_sample(None, Quality.BAD, str(e)))
                     continue
                 self._counters.increment_read()
                 key = (group.unit_id, signal.name)

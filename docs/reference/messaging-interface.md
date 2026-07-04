@@ -31,7 +31,7 @@ Request/reply carries `header.reply_to` + `header.correlation_id`; the reply is 
 | Class | Message | Direction | Topic | Reply |
 |-------|---------|-----------|-------|-------|
 | `data` | `SouthboundSignalUpdate` | adapter → bus | `ecv1/{device}/ModbusAdapter/{instance}/data/{signal}` | — |
-| `evt` | `SouthboundEvent` | adapter → bus | `ecv1/{device}/ModbusAdapter/{instance}/evt/{connection\|write}` | — |
+| `evt` | `evt` | adapter → bus | `ecv1/{device}/ModbusAdapter/{instance}/evt/{severity}/{connection\|write}` | — |
 | `cmd` | `sb/read` | bus → adapter | `ecv1/{device}/ModbusAdapter/main/cmd/sb/read` | `{ok,result}` |
 | `cmd` | `sb/write` | bus → adapter | `ecv1/{device}/ModbusAdapter/main/cmd/sb/write` | `{ok,result}` |
 | `cmd` | `sb/status` | bus → adapter | `ecv1/{device}/ModbusAdapter/main/cmd/sb/status` | `{ok,result}` |
@@ -44,7 +44,8 @@ Request/reply carries `header.reply_to` + `header.correlation_id`; the reply is 
 Fleet consumers subscribe the six UNS wildcards — telemetry is one filter,
 `ecv1/+/+/+/data/#`; events `ecv1/+/+/+/evt/#`; metrics `ecv1/+/+/+/metric/#`; state
 `ecv1/+/+/+/state`. `state`/`metric`/`cfg`/`log` are library-owned **reserved** classes — a component
-publish to them is rejected; the adapter only ever mints `data`/`evt`/`cmd` topics via the UNS builder.
+publish to them is rejected; the adapter only ever mints `data`/`evt` topics via the `data()`/`events()`
+facades and `cmd` replies via the command inbox — never a hand-assembled topic string.
 
 ## The command inbox
 
@@ -62,6 +63,8 @@ is `{"ok": true, "result": <verb result>}` on success, or
 
 ## Sample object
 
+The `sb/read` reply's `reads[]` entries (below) always carry all five fields explicitly:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `value` | number \| boolean \| string | Per the signal's type (see [data-types.md](data-types.md)). |
@@ -70,13 +73,23 @@ is `{"ok": true, "result": <verb result>}` on success, or
 | `sourceTs` | null | Modbus has no device timestamp. |
 | `serverTs` | string | Adapter read time, ISO-8601 UTC. |
 
+`data`-class samples (below) go through the `data()` facade instead, which **omits** a field rather
+than emitting it `null`, and defaults an omitted `quality` to `GOOD` with `qualityRaw: "unspecified"`
+(Modbus has no native quality codes) rather than the literal string `"Good"`.
+
 ## Data plane
 
 ### `SouthboundSignalUpdate` (adapter → bus, `data` class)
 
-Topic `ecv1/{device}/ModbusAdapter/{instance}/data/{signal}` — `{signal}` is the sanitized signal
-name. The stable `signal.id` and protocol-native `signal.address` stay in the body (consumers key on
-those, not the topic channel).
+Published through the library's `data()` facade (`gg.instance(id).data()` —
+`docs/platform/DESIGN-class-facades.md` §2.1), which constructs the body, sanitizes the channel, mints
+the topic, and stamps the envelope identity — the adapter only ever calls
+`.signal(id).name(n).address(a).device(...).add_samples(...).signal_path(p).publish()`. Topic
+`ecv1/{device}/ModbusAdapter/{instance}/data/{signal}` — `{signal}` is the sanitized signal name. The
+stable `signal.id` and protocol-native `signal.address` stay in the body (consumers key on those, not
+the topic channel). Quality has no Modbus-native meaning, so a successful read omits it and the facade
+defaults it to `GOOD` with `qualityRaw: "unspecified"` (a synthesized-vs-device-reported marker); a
+failed read passes an explicit `BAD` with the exception text as `qualityRaw`.
 
 ```jsonc
 "body": {
@@ -86,7 +99,7 @@ those, not the topic channel).
     "name": "Temperature",
     "address": { "unitId": 1, "table": "holding", "address": 0, "type": "float32", "wordOrder": "big", "byteOrder": "big" }
   },
-  "samples": [ { "value": 21.4, "quality": "GOOD", "qualityRaw": "Good", "sourceTs": null, "serverTs": "2026-07-03T01:48:00Z" } ]
+  "samples": [ { "value": 21.4, "quality": "GOOD", "qualityRaw": "unspecified", "serverTs": "2026-07-03T01:48:00Z" } ]
 }
 ```
 
@@ -107,8 +120,8 @@ A single `{name,value}` object (no `writes` array) is also accepted. A **signal-
 `{ "name": "<configured signal>" }` (friendly; uses that signal's table/type/order) or explicit
 `{ "unitId"?, "table", "address", "type", "wordOrder"?, "byteOrder"?, "scale"?, "offset"?, "count"? }`.
 Entries without `value`, an unresolvable ref, a read-only table (`discrete`/`input`), or a `bit` signal
-are reported per-entry as `{"ok": false, "error": …}`. Each write also emits an `evt/write` audit
-event. Writes use FC5/FC15 (coil), FC6/FC16 (holding).
+are reported per-entry as `{"ok": false, "error": …}`. Each write also emits an
+`evt/info/write`/`evt/warning/write` audit event. Writes use FC5/FC15 (coil), FC6/FC16 (holding).
 
 ### `sb/read` (command, request/reply)
 
@@ -131,8 +144,29 @@ Unresolvable refs are omitted (match by `signal`). A signal that errors returns 
 
 ## Events (`evt` class)
 
-- **`evt/connection`** — a Modbus link up/down transition per instance (`{instance, connected, endpoint}`), so a console can raise a device-offline alert immediately instead of waiting for the next metric tick.
-- **`evt/write`** — a per-write audit record (`{instance, signal, value, ok, error, serverTs}`) for command-review.
+Published through the library's `events()` facade (`gg.instance(id).events()` —
+`docs/platform/DESIGN-class-facades.md` §2.2): severity **derives** the channel
+`evt/{severity}/{type}`, so the topic and the body can never disagree — identical in shape to the
+OPC UA reference adapter.
+
+```jsonc
+"body": {
+  "severity": "critical", "type": "connection", "message": "Modbus link down",
+  "timestamp": "2026-07-03T01:48:00Z", "context": { "endpoint": "tcp://10.0.0.50:502 unit=1" },
+  "alarm": true, "active": true
+}
+```
+
+- **`evt/critical/connection`** — a Modbus link up/down transition per instance, modeled as a
+  stateful alarm: `raise_alarm("connection", ...)` on drop (`alarm:true, active:true`),
+  `clear_alarm("connection", ...)` on restore (`active:false`) — both ride the *same*
+  `evt/critical/connection` channel, so a console tracking `evt/critical/#` sees both ends. Context
+  carries `{endpoint}` (the connection description, e.g. slave address).
+- **`evt/info/write`** / **`evt/warning/write`** — a per-write audit record, `info` on success and
+  `warning` on failure — `emit("write", message, {signal, value, error?}, severity)`.
+
+A fleet consumer subscribing `ecv1/+/+/+/evt/critical/#` sees only alarm-grade events without
+per-adapter knowledge of the channel shape.
 
 ### `southbound_health` (metric, reserved class — automatic)
 

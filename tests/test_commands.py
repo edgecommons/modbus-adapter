@@ -55,9 +55,9 @@ def test_write_roundtrip_and_evt():
     # value round-trips through the in-memory store
     back = svc.read({"signals": [{"name": "RWInt16"}]})
     assert back["reads"][0]["value"] == -1234
-    # an evt/write audit record was emitted
+    # an evt/write audit record was emitted through the events() facade wrapper
     assert events.events and events.events[0][0] == "write"
-    assert events.events[0][1]["signal"] == "RWInt16" and events.events[0][1]["ok"] is True
+    assert events.events[0][2] == "RWInt16" and events.events[0][1] is True
 
 
 def test_write_coil():
@@ -149,7 +149,7 @@ def test_write_encode_failure_reported():
     conn.write_registers = boom
     res = svc.write({"writes": [{"name": "RWInt16", "value": 7}]})
     assert res["results"][0]["ok"] is False and "bus error" in res["results"][0]["error"]
-    assert events.events[0][1]["ok"] is False
+    assert events.events[0][1] is False
 
 
 def test_read_unresolvable_ref_skipped():

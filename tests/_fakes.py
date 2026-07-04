@@ -1,12 +1,18 @@
-"""Shared test doubles: an in-memory Modbus connection, a fake instance handle / messaging client,
-and a ServerConfiguration factory — so the UNS data/command/event surface unit-tests without a live
-broker or a real PLC."""
+"""Shared test doubles: an in-memory Modbus connection, a recording messaging client + a real
+``GgInstance`` bound to it (so the publisher/events unit tests exercise the real ggcommons
+``data()``/``events()`` facades -- DESIGN-class-facades -- instead of a hand-rolled uns()/
+new_message() fake), and a ServerConfiguration factory."""
 import types
 from collections import defaultdict
 
-from ggcommons.uns import UnsClass
+from ggcommons.gg_instance import GgInstance
+from ggcommons.messaging.identity import HierEntry, MessageIdentity
 
 from modbus_adapter.config.server_configuration import ServerConfiguration
+
+#: The identity the fake GgInstance is bound to -- mirrors the pre-migration fake's
+#: ``ecv1/thing1/ModbusAdapter/plc1/...`` topic shape (device=thing1, component=ModbusAdapter).
+IDENTITY = MessageIdentity([HierEntry("device", "thing1")], "ModbusAdapter", "plc1")
 
 
 class FakeConn:
@@ -43,49 +49,62 @@ class FakeConn:
 
 
 class FakeMessaging:
-    """Records publish(topic, msg) calls."""
+    """Records publish(topic, msg)/publish_to_iot_core(topic, msg, qos) calls -- the
+    ``messaging_client`` the ``data()``/``events()`` facades publish through."""
 
     def __init__(self):
-        self.published = []          # list of (topic, msg)
+        self.published = []          # list of (topic, Message)
 
     def publish(self, topic, msg):
         self.published.append((topic, msg))
 
-
-class _FakeUns:
-    def topic(self, cls: UnsClass, channel=None):
-        base = f"ecv1/thing1/ModbusAdapter/plc1/{cls.value}"
-        return f"{base}/{channel}" if channel else base
+    def publish_to_iot_core(self, topic, msg, qos):
+        self.published.append((topic, msg))
 
 
-class _FakeBuilder:
-    def __init__(self):
-        self._payload = None
+class _FakeConfigManager:
+    """Minimal ``ConfigManager`` double: just enough for ``MessageBuilder``/``DataFacade``/
+    ``EventsFacade`` (component identity, tag config, and the ``publish.channel`` lookups, which
+    default to "nothing configured" -> LOCAL)."""
 
-    def with_payload(self, payload):
-        self._payload = payload
-        return self
+    def __init__(self, identity=IDENTITY):
+        self._identity = identity
 
-    def build(self):
-        return {"body": self._payload}
+    def get_component_identity(self):
+        return self._identity
+
+    def get_tag_config(self):
+        return None
+
+    def get_instance_config(self, instance_id):
+        return {}
+
+    def get_global_config(self):
+        return {}
 
 
-class FakeInstance:
-    """Stands in for gg.instance(id): uns().topic(...) + new_message(...).with_payload().build()."""
-
-    def uns(self):
-        return _FakeUns()
-
-    def new_message(self, name, version):
-        return _FakeBuilder()
+def FakeInstance(messaging=None, instance_id="plc1"):
+    """A real :class:`~ggcommons.gg_instance.GgInstance` bound to a fake identity/messaging --
+    exercises the real ``data()``/``events()`` facades (DESIGN-class-facades) so the publisher/
+    events tests pin the real body/topic contract instead of a hand-rolled fake. Drop-in
+    replacement for the pre-migration ``FakeInstance`` (same default topic shape:
+    ``ecv1/thing1/ModbusAdapter/plc1/...``)."""
+    messaging = messaging if messaging is not None else FakeMessaging()
+    return GgInstance(instance_id, _FakeConfigManager(), False, messaging_client=messaging)
 
 
 class FakeEvents:
-    def __init__(self):
-        self.events = []             # list of (channel, body)
+    """Stands in for :class:`~modbus_adapter.events.EventEmitter` in ``CommandService``/
+    ``ModbusDevice`` tests: records ``connection``/``write`` calls without touching the bus."""
 
-    def emit(self, channel, body):
-        self.events.append((channel, body))
+    def __init__(self):
+        self.events = []             # list of (kind, *args)
+
+    def connection(self, connected, context=None):
+        self.events.append(("connection", connected, context))
+
+    def write(self, ok, signal_name, value, error=None):
+        self.events.append(("write", ok, signal_name, value, error))
 
 
 class FakePoller:

@@ -107,9 +107,7 @@ class CommandService:
             ok, error = self._write_one(signal, unit, w["value"])
             results.append({"signal": signal.name, "value": w["value"], "ok": ok,
                             **({"error": error} if error else {})})
-            self._events.emit("write", {"instance": self._config.id, "signal": signal.name,
-                                        "value": w["value"], "ok": ok, "error": error,
-                                        "serverTs": _now_iso()})
+            self._events.write(ok, signal.name, w["value"], error)
         return {"id": self._config.id, "written": sum(1 for r in results if r["ok"]), "results": results}
 
     def _write_one(self, signal, unit, value):

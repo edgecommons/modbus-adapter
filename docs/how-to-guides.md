@@ -81,8 +81,9 @@ subscribe app/r   → { "ok": true, "result": { "id": "plc1", "reads": [ … ] }
 
 Address a signal by `name` (a configured signal) or explicitly by
 `{ unitId?, table, address, type, wordOrder?, scale?, … }` for arbitrary access. Read-only tables
-(`discrete`/`input`) are reported per-entry as `ok:false`. Each write also emits an `evt/write` audit
-event. Full schemas: [messaging reference](reference/messaging-interface.md).
+(`discrete`/`input`) are reported per-entry as `ok:false`. Each write also emits an
+`evt/info/write`/`evt/warning/write` audit event. Full schemas:
+[messaging reference](reference/messaging-interface.md).
 
 ---
 
@@ -133,6 +134,8 @@ the Downward API).
   messaging` it auto-publishes on the UNS `metric` class
   (`ecv1/{device}/ModbusAdapter/main/metric/southbound_health`); `log`/`cloudwatch`/`prometheus` also work.
 - **State keepalive:** the library publishes `ecv1/{device}/ModbusAdapter/main/state` every ~5 s.
-- **Events:** `evt/connection` (link up/down per instance) and `evt/write` (write audit) on the `evt` class.
+- **Events:** `evt/critical/connection` (link up/down per instance, a stateful alarm — raised on
+  drop, cleared on restore) and `evt/{info|warning}/write` (write audit) on the `evt` class; severity
+  derives the channel.
 - **Status verb:** `sb/status` → `{ connected, metrics }`. **Signals verb:** `sb/signals` → the resolved signal list with addresses.
 - **Logs:** each subsystem logs under its own name with the `[<instanceId>]` prefix.

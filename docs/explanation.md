@@ -58,7 +58,10 @@ Two consequences worth internalizing:
 ## Two planes
 
 - **Data plane** — high-rate, fire-and-forget telemetry: `SouthboundSignalUpdate` out on the `data`
-  class; discrete `evt/connection` and `evt/write` events out on the `evt` class.
+  class (through the library's `data()` facade); discrete events out on the `evt` class (through
+  `events()`) — a `critical` connection alarm (`evt/critical/connection`, raised on drop / cleared on
+  restore) and an `info`/`warning` write audit (`evt/{info|warning}/write`). Severity **derives** the
+  channel, so the topic and the body can never disagree.
 - **Control plane** — low-rate request/reply through the `cmd` inbox: `sb/write`, on-demand `sb/read`,
   and `sb/status` / `sb/signals` / `reconnect` / `repoll` verbs.
 
@@ -70,9 +73,14 @@ the target device with an `instance` field in the request body.
 ## Quality
 
 Every sample carries a normalized `quality` (`GOOD`/`BAD`/`UNCERTAIN`) plus `qualityRaw` (the native
-detail). A successful read is `GOOD`; a Modbus exception or timeout publishes `BAD` for every signal in
-the failed read block, with the exception text in `qualityRaw`, so a consumer sees an outage rather
-than a stale value silently persisting.
+detail). This is structural, not adapter discipline: the library's `data()` facade **requires** a
+quality on every sample it constructs, defaulting an omitted one to `GOOD` (Modbus has no native
+quality codes to report) and marking the synthesis `qualityRaw: "unspecified"` so a consumer can tell
+a synthesized `GOOD` from a device-reported one. A Modbus exception or timeout publishes `BAD` for
+every signal in the failed read block, with the exception text in `qualityRaw`, so a consumer sees an
+outage rather than a stale value silently persisting. (A block failure has no value at all to report —
+not even a "null" reading — so that one case goes through the facade's raw escape hatch rather than its
+normal value-required builder; see `publisher.py`'s module docstring.)
 
 ## Instances are independent
 
