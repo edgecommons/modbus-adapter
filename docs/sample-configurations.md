@@ -192,7 +192,6 @@ A single 16-bit register packs six status flags. Each is surfaced as its own boo
     "instances": [
       {
         "id": "skid1",
-        "adapter": "modbus",
         "connection": { "transport": "tcp", "host": "10.0.0.50", "port": 502, "unitId": 1, "timeoutMs": 1000 },
         "publish": { "batchMs": 0 },
         "write":   { "enabled": true },

@@ -9,7 +9,6 @@
     "instances": [
       {
         "id": "plc1",
-        "adapter": "modbus",
         "connection": { "transport": "tcp", "host": "127.0.0.1", "port": 5020, "unitId": 1, "timeoutMs": 1000 },
         "publish": { "batchMs": 0 },
         "write": { "enabled": true },
@@ -23,7 +22,6 @@
       },
       {
         "id": "plc2",
-        "adapter": "modbus",
         "connection": { "transport": "tcp", "host": "127.0.0.1", "port": 5021, "unitId": 1, "timeoutMs": 1000 },
         "publish": { "batchMs": 0 },
         "write": { "enabled": true },

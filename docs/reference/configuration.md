@@ -116,7 +116,7 @@ first level (site) after `ecv1`.
     "global": { "defaults": { "pollIntervalMs": 1000, "publishMode": "onChange", "maxGap": 8 } },
     "instances": [
       {
-        "id": "plc1", "adapter": "modbus",
+        "id": "plc1",
         "connection": { "transport": "tcp", "host": "10.0.0.50", "port": 502, "unitId": 1 },
         "publish": { "batchMs": 0 },
         "write":   { "enabled": true },
