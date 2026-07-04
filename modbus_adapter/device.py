@@ -73,3 +73,13 @@ class ModbusDevice:
         self._poller.stop()
         self._publisher.flush()
         self._connection.close()
+
+    def is_connected(self) -> bool:
+        """Whether this device's Modbus slave connection is currently up — the per-instance
+        connectivity reported in the main state keepalive's instances[] (#1c)."""
+        return self._connection.is_connected()
+
+    @property
+    def endpoint(self) -> str:
+        """Human description of the slave connection (host:port/unit) — the connectivity detail."""
+        return self.config.connection.describe()

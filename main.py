@@ -18,6 +18,7 @@ import threading
 
 from ggcommons import GGCommonsBuilder
 from ggcommons.command_inbox import CommandException
+from ggcommons.heartbeat.instance_connectivity import InstanceConnectivity
 
 from modbus_adapter.config.server_configuration import ServerConfiguration
 from modbus_adapter.device import ModbusDevice
@@ -75,6 +76,20 @@ def main():
         logger.info("Command verbs registered: %s", sorted(commands.verbs()))
     else:
         logger.warning("No command inbox (unresolved identity) — command surface disabled")
+
+    # Report each configured slave's connectivity AT THE INSTANCE LEVEL via the component's main state
+    # keepalive's instances[] (the #1c surface): a slave whose device has not (re)connected reads
+    # disconnected. Identity/data/lifecycle stay under `main`; this is the per-slave connectivity view.
+    def _instance_connectivity():
+        out = []
+        for iid in config_manager.get_instance_ids():
+            device = devices.get(iid)
+            connected = device is not None and device.is_connected()
+            detail = device.endpoint if device is not None else None
+            out.append(InstanceConnectivity.of(iid, connected, detail))
+        return out
+
+    gg.set_instance_connectivity_provider(_instance_connectivity)
 
     def worker(instance_id):
         try:
