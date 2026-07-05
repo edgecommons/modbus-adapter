@@ -11,7 +11,7 @@ class SignalSpec:
 
     def __init__(self, name, table, address, type_="uint16", count=None,
                  word_order=codec.BIG, byte_order=codec.BIG, bit=None,
-                 scale=None, offset=None, deadband=None, topic=None):
+                 scale=None, offset=None, deadband=None):
         self.name = name
         self.table = table
         self.address = address
@@ -23,7 +23,6 @@ class SignalSpec:
         self.scale = scale
         self.offset = offset
         self.deadband = deadband or DeadbandSpec()
-        self.topic = topic
 
     @staticmethod
     def from_dict(o):
@@ -57,7 +56,7 @@ class SignalSpec:
             name=name, table=table, address=address, type_=type_, count=count,
             word_order=o.get("wordOrder", codec.BIG), byte_order=o.get("byteOrder", codec.BIG),
             bit=bit, scale=o.get("scale"), offset=o.get("offset"),
-            deadband=DeadbandSpec.from_dict(o.get("deadband")), topic=o.get("topic"),
+            deadband=DeadbandSpec.from_dict(o.get("deadband")),
         )
 
     def unit_length(self) -> int:

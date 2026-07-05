@@ -7,18 +7,24 @@ see the [how-to guides](../how-to-guides.md); for the type system, see [data-typ
 
 The adapter reads one JSON document from `-c/--config`, defaulting by platform: `HOST` → `FILE`,
 `GREENGRASS` → `GG_CONFIG`, `KUBERNETES` → `CONFIGMAP`. Adapter settings live under `component`; the
-sibling sections (`tags`, `messaging`, `logging`, `metricEmission`, `heartbeat`) are standard
-ggcommons sections.
+sibling sections (`tags`, `hierarchy`, `identity`, `topic`, `messaging`, `logging`, `metricEmission`,
+`heartbeat`) are standard ggcommons sections.
 
 ## Top-level sections
 
 | Section | Required | Purpose |
 |---------|----------|---------|
 | `component` | yes | Adapter instances and global defaults (this document). |
-| `tags` | recommended | Site/asset identity attached to every message; usable as topic variables. |
+| `tags` | recommended | Business metadata attached to every message's `tags`. |
+| `hierarchy` | optional | UNS enterprise-hierarchy level names; last level is the device (thing). Absent ⇒ `["device"]`. |
+| `identity` | optional | Values for every hierarchy level except the last (which is the resolved thing name). |
+| `topic` | optional | `includeRoot` (default `false`) — insert the site level after `ecv1` on a multi-site broker. |
 | `messaging` | HOST/KUBERNETES | MQTT broker connection (or `--transport MQTT <file>`). |
-| `metricEmission` | optional | Routes the `southbound_health` metric (`target`: `log`/`messaging`/`cloudwatch`/`prometheus`). |
+| `metricEmission` | optional | Routes `southbound_health` (`target`: `log`/`messaging`/`cloudwatch`/`prometheus`). `messaging` auto-routes to the UNS `metric` class. |
 | `logging`, `heartbeat` | optional | Standard ggcommons sections. |
+
+UNS topics are `ecv1/{device}/{component}/{instance}/{class}[/channel]` — built and validated by the
+library from the identity above; there are no per-instance/per-signal topic templates.
 
 ## `component.global.defaults`
 
@@ -33,13 +39,12 @@ ggcommons sections.
 
 | Key | Type | Definition |
 |-----|------|-----------|
-| `id` | string | Stable instance id; appears as `{InstanceId}` in topics and `device.instance`. |
+| `id` | string | Stable instance id; the `{instance}` token of the `data`/`evt` topics and `device.instance`. |
 | `adapter` | string | Informational; echoed as `device.adapter` (`"modbus"`). |
 | `connection` | object | Transport + endpoint (below). |
 | `defaults` | object | Per-instance overrides of `global.defaults`. |
-| `publish` | object | `topic` (template, default `southbound/{ComponentName}/{InstanceId}/{signalId}`), `batchMs`. |
-| `write` | object | `enabled` (default `false`), `topic`. |
-| `read` | object | `topic` for on-demand reads. |
+| `publish` | object | `batchMs` (buffer window). |
+| `write` | object | `enabled` (default `false`) — whether the `sb/write` verb accepts writes for this instance. |
 | `pollGroups` | array | Groups of signals polled together (below). |
 
 ### `connection`
@@ -58,7 +63,7 @@ ggcommons sections.
 
 | Key | Type | Default | Definition |
 |-----|------|---------|-----------|
-| `id` | string | random | Group id (logs + the `signals` control query). |
+| `id` | string | random | Group id (logs + the `sb/signals` control query). |
 | `pollIntervalMs` | number | instance default | How often this group is read. |
 | `unitId` | number | connection `unitId` | Modbus unit id for this group's reads. |
 | `publishMode` | string | instance default | `onChange` / `always`. |
@@ -69,7 +74,7 @@ ggcommons sections.
 
 | Key | Type | Default | Definition |
 |-----|------|---------|-----------|
-| `name` | string | **required** | Human name; the `{signalId}` topic variable and the friendly write/read ref. |
+| `name` | string | **required** | Human name; the `data` channel token (sanitized) and the friendly write/read ref. |
 | `table` | string | **required** | `coil` / `discrete` / `holding` / `input`. |
 | `address` | number | **required** | 0-based PDU register/bit address. |
 | `type` | string | `uint16` (bool for bit tables) | See [data-types.md](data-types.md). |
@@ -78,12 +83,20 @@ ggcommons sections.
 | `bit` | number | — | Extract one bit (0–15) of a holding/input register as a bool. |
 | `scale` / `offset` | number | — | Linear transform on numeric values. |
 | `deadband` | object | `{type:"none"}` | `type`: `none`/`absolute`/`percent`; `value`: number. Gates `onChange` publishing. |
-| `topic` | string | inherits `publish.topic` | Per-signal publish-topic override. |
 
-## Template variables
+## Identity & the UNS device tree
 
-`{ThingName}`, `{ComponentName}`, `{ComponentFullName}`, `{InstanceId}`, `{signalId}` (the signal name), and
-any key under top-level `tags` (e.g. `{site}`) — substituted into topic templates (sanitized).
+`hierarchy.levels` names the enterprise tree, deepest (the device) last; `identity` supplies every
+level's value **except** the last (the last is always the resolved thing name). The values become the
+envelope `identity.hier`/`path`. With the default (`["device"]`) topics are
+`ecv1/{thing}/ModbusAdapter/{instance}/...`; `topic.includeRoot: true` (multi-site broker) prepends the
+first level (site) after `ecv1`.
+
+```jsonc
+"hierarchy": { "levels": ["site", "shop", "line", "device"] },
+"identity":  { "site": "plant1", "shop": "assembly", "line": "5" }
+// -> identity.path = "plant1/assembly/5/<thing>", topics device token = <thing>
+```
 
 ## Precedence
 
@@ -94,18 +107,19 @@ any key under top-level `tags` (e.g. `{site}`) — substituted into topic templa
 
 ```jsonc
 {
-  "tags": { "appId": "line5", "site": "plant1", "shop": "assembly", "line": "5" },
+  "tags": { "appId": "line5" },
+  "hierarchy": { "levels": ["site", "shop", "line", "device"] },
+  "identity": { "site": "plant1", "shop": "assembly", "line": "5" },
   "messaging": { "local": { "type": "mqtt", "host": "localhost", "port": 1883 } },
-  "metricEmission": { "target": "messaging", "targetConfig": { "topic": "metrics/{ThingName}/{ComponentName}" } },
+  "metricEmission": { "target": "messaging" },
   "component": {
     "global": { "defaults": { "pollIntervalMs": 1000, "publishMode": "onChange", "maxGap": 8 } },
     "instances": [
       {
-        "id": "plc1", "adapter": "modbus",
+        "id": "plc1",
         "connection": { "transport": "tcp", "host": "10.0.0.50", "port": 502, "unitId": 1 },
-        "publish": { "topic": "southbound/{site}/{ComponentName}/{InstanceId}/{signalId}", "batchMs": 0 },
-        "write":   { "enabled": true, "topic": "southbound/{ComponentName}/{InstanceId}/write" },
-        "read":    { "topic": "southbound/{ComponentName}/{InstanceId}/read" },
+        "publish": { "batchMs": 0 },
+        "write":   { "enabled": true },
         "pollGroups": [
           { "id": "fast", "pollIntervalMs": 500,
             "signals": [

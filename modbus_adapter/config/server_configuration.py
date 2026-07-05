@@ -1,22 +1,12 @@
 """Per-instance configuration resolver — the Modbus analog of the OPC UA ServerConfiguration.
 
-Resolves an instance's connection, timing defaults (instance ▸ global ▸ built-in), the publish /
-write / read / control topic templates, and its poll groups.
+Resolves an instance's connection, its timing defaults (instance ▸ global ▸ built-in), whether writes
+are enabled, and its poll groups. Topic construction is no longer config-driven: data updates and the
+command surface address the Unified Namespace via ``gg.uns()`` / the command inbox, so the legacy
+publish / write / read / control topic templates are gone.
 """
-import re
-
 from .connection_info import ConnectionInfo
 from .poll_group import PollGroup
-
-_DEFAULT_PUBLISH = "southbound/{ComponentName}/{InstanceId}/{signalId}"
-_DEFAULT_WRITE = "southbound/{ComponentName}/{InstanceId}/write"
-_DEFAULT_READ = "southbound/{ComponentName}/{InstanceId}/read"
-_CONTROL = "southbound/{ComponentName}/{InstanceId}/control/+"
-
-
-def _sanitize(value: str) -> str:
-    """Strip path separators / MQTT wildcards / whitespace from a topic segment (injection guard)."""
-    return re.sub(r"[/+#\s]", "_", str(value))
 
 
 class ServerConfiguration:
@@ -42,27 +32,12 @@ class ServerConfiguration:
         self.max_gap = int(_default("maxGap", 0))
 
         pub = inst.get("publish", {})
-        self.publish_topic_template = pub.get("topic", _DEFAULT_PUBLISH)
         self.batch_ms = int(pub.get("batchMs", _default("batchMs", 0)))
 
         write = inst.get("write", {})
         self.write_enabled = write.get("enabled", False) is True
-        self.write_topic = self.resolve_template(write.get("topic", _DEFAULT_WRITE))
-
-        read = inst.get("read", {})
-        self.read_topic = self.resolve_template(read.get("topic", _DEFAULT_READ))
-        self.control_topic = self.resolve_template(_CONTROL)
 
         self.poll_groups = [PollGroup.from_dict(g, self) for g in inst.get("pollGroups", [])]
-
-    def resolve_template(self, template: str) -> str:
-        """Resolve {ThingName}/{ComponentName}/{ComponentFullName}/custom tags via the lib, then
-        substitute the adapter-specific {InstanceId}."""
-        return self._cm.resolve_template(template).replace("{InstanceId}", _sanitize(self.id))
-
-    def resolve_publish_topic(self, override_template, signal_name: str) -> str:
-        template = override_template or self.publish_topic_template
-        return self.resolve_template(template).replace("{signalId}", _sanitize(signal_name))
 
     def all_signals(self):
         """(poll_group, signal) for every configured signal — used by the command/control surfaces."""

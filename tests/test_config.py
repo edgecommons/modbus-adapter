@@ -8,7 +8,8 @@ from modbus_adapter.config.signal_spec import SignalSpec
 
 
 class FakeCM:
-    """Minimal ConfigManager stand-in: resolves the lib-level template tokens + custom tags."""
+    """Minimal ConfigManager stand-in: ServerConfiguration only needs per-instance config now that
+    topic construction moved to the UNS builder."""
 
     def __init__(self, instances, component="ModbusAdapter"):
         self._instances = {i["id"]: i for i in instances}
@@ -16,12 +17,6 @@ class FakeCM:
 
     def get_instance_config(self, iid):
         return self._instances.get(iid, {})
-
-    def resolve_template(self, t):
-        return (t.replace("{ComponentFullName}", "com.mbreissi.modbus." + self._component)
-                 .replace("{ComponentName}", self._component)
-                 .replace("{ThingName}", "thing1")
-                 .replace("{site}", "site1"))
 
 
 # --- SignalSpec ------------------------------------------------------------------------------
@@ -86,12 +81,12 @@ def test_connection_defaults_and_transports():
 
 
 # --- ServerConfiguration ---------------------------------------------------------------------
-def test_server_configuration_precedence_and_topics():
+def test_server_configuration_precedence():
     inst = {
         "id": "plc1",
         "connection": {"transport": "tcp", "host": "10.0.0.5", "port": 1502, "unitId": 3},
         "defaults": {"pollIntervalMs": 250},
-        "publish": {"topic": "southbound/{site}/{ComponentName}/{InstanceId}/{signalId}", "batchMs": 100},
+        "publish": {"batchMs": 100},
         "write": {"enabled": True},
         "pollGroups": [{
             "id": "g1", "pollIntervalMs": 500,
@@ -107,15 +102,34 @@ def test_server_configuration_precedence_and_topics():
     assert sc.publish_mode == "always"        # falls back to global
     assert sc.batch_ms == 100
     assert sc.write_enabled is True
-    assert sc.write_topic == "southbound/ModbusAdapter/plc1/write"
-    assert sc.read_topic == "southbound/ModbusAdapter/plc1/read"
-    assert sc.control_topic == "southbound/ModbusAdapter/plc1/control/+"
 
     g = sc.poll_groups[0]
     assert g.poll_interval_ms == 500          # group override
     assert g.unit_id == 3                      # inherits connection unit
     assert g.publish_mode == "always"          # inherits server
     assert g.max_gap == 4
-    t = g.signals[0]
-    assert sc.resolve_publish_topic(t.topic, t.name) == "southbound/site1/ModbusAdapter/plc1/Temp"
     assert len(sc.all_signals()) == 1
+
+
+def test_write_disabled_by_default():
+    inst = {"id": "plc9", "pollGroups": []}
+    sc = ServerConfiguration(FakeCM([inst]), {}, "plc9")
+    assert sc.write_enabled is False
+
+
+def test_uns_data_topic_and_identity():
+    """Data-plane addressing now comes from the UNS builder (gg.instance(id).uns()), not a config
+    template: the channel is the sanitized signal name and the topic is device/component/instance-shaped."""
+    from ggcommons.config.manager.config_manager import ConfigManager
+    from ggcommons.messaging.identity import HierEntry, MessageIdentity
+    from ggcommons.uns import Uns, UnsClass
+
+    identity = MessageIdentity(
+        [HierEntry("site", "lab"), HierEntry("device", "thing1")], "ModbusAdapter"
+    ).with_instance("plc1")
+    uns = Uns(identity, include_root=False)                       # rootless (default) grammar
+    assert uns.topic(UnsClass.DATA, ConfigManager.sanitize("Temp")) == \
+        "ecv1/thing1/ModbusAdapter/plc1/data/Temp"
+    # A signal name carrying reserved topic chars is sanitized to a single valid channel token.
+    assert uns.topic(UnsClass.DATA, ConfigManager.sanitize("Line/1#Temp")) == \
+        "ecv1/thing1/ModbusAdapter/plc1/data/Line_1_Temp"

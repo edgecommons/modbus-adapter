@@ -14,18 +14,23 @@ ComponentConfiguration:
       logging:
         level: "INFO"
         python_format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+      # UNS state keepalive (ecv1/{device}/ModbusAdapter/main/state) + system 'sys' measures.
       heartbeat:
         intervalSecs: 5
-        targets:
-          - type: "messaging"
-            config:
-              destination: "ipc"
-              topic: "heartbeat/{ThingName}/{ComponentName}"
         measures:
           cpu: true
           memory: true
           disk: false
       tags: {}
+      # Optional UNS enterprise-hierarchy placement. Absent => the zero-config default ["device"] and
+      # topics are ecv1/{thing}/ModbusAdapter/{instance}/.... Supply the non-device level values in
+      # `identity`; the last level (device) is always the resolved thing name and must NOT be set.
+      # hierarchy:
+      #   levels: ["site", "area", "line", "device"]
+      # identity:
+      #   site: "dallas"
+      #   area: "packaging"
+      #   line: "line-3"
       metricEmission:
         target: "log"
         targetConfig:
@@ -38,9 +43,10 @@ ComponentConfiguration:
           - id: "plc1"
             adapter: "modbus"
             connection: { transport: "tcp", host: "127.0.0.1", port: 5020, unitId: 1, timeoutMs: 1000 }
-            publish: { topic: "southbound/{ComponentName}/{InstanceId}/{signalId}", batchMs: 0 }
-            write: { enabled: true, topic: "southbound/{ComponentName}/{InstanceId}/write" }
-            read: { topic: "southbound/{ComponentName}/{InstanceId}/read" }
+            # Data updates publish on the UNS data class (ecv1/{device}/ModbusAdapter/plc1/data/{signal});
+            # on-demand read/write/control ride the command inbox (cmd class). No topic templates.
+            publish: { batchMs: 0 }
+            write: { enabled: true }
             pollGroups:
               - id: "main"
                 pollIntervalMs: 1000

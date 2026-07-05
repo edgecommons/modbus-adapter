@@ -9,6 +9,8 @@ import threading
 import time
 from collections import defaultdict
 
+from ggcommons.facades.quality import Quality
+
 from . import codec
 from .config.poll_group import ALWAYS
 
@@ -85,7 +87,7 @@ class PollManager:
                 raw = str(e) or "read error"
                 for signal in block["signals"]:
                     self._counters.increment_read_error()
-                    self._publisher.offer(group, signal, self._publisher.make_sample(None, "BAD", raw))
+                    self._publisher.offer(group, signal, self._publisher.make_sample(None, Quality.BAD, raw))
                 continue
             for signal in block["signals"]:
                 off = signal.address - block["start"]
@@ -96,13 +98,28 @@ class PollManager:
                                          count=signal.count, bit=signal.bit)
                 except Exception as e:  # noqa: BLE001
                     self._counters.increment_read_error()
-                    self._publisher.offer(group, signal, self._publisher.make_sample(None, "BAD", str(e)))
+                    self._publisher.offer(group, signal, self._publisher.make_sample(None, Quality.BAD, str(e)))
                     continue
                 self._counters.increment_read()
                 key = (group.unit_id, signal.name)
                 if group.publish_mode == ALWAYS or signal.deadband.exceeds(self._last.get(key), value):
                     self._last[key] = value
                     self._publisher.offer(group, signal, self._publisher.make_sample(value))
+
+    def poll_once(self):
+        """Force one synchronous poll of every group now (the ``repoll`` command's action). Reuses
+        the normal poll path, so change/deadband gating and publishing behave exactly as on the
+        timer. Returns the number of groups polled."""
+        polled = 0
+        for group in self._config.poll_groups:
+            if group.id not in self._blocks:           # coalesce lazily if start() hasn't run
+                self._blocks[group.id] = coalesce(group.signals, group.max_gap)
+            try:
+                self._poll_group(group)
+                polled += 1
+            except Exception as e:  # noqa: BLE001 - one bad group must not fail the whole repoll
+                LOGGER.error("[%s] repoll of group '%s' failed: %s", self._config.id, group.id, e)
+        return polled
 
     def resolved_signals(self):
         out = []

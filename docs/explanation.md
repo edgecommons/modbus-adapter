@@ -11,6 +11,17 @@ read/write command surface, and emits a `southbound_health` metric. The cloud se
 regardless of protocol — only `device.adapter` and the opaque `signal.address` differ. This adapter is
 the **poll-based** reference; OPC UA is the subscribe-based one.
 
+## The Unified Namespace (UNS)
+
+Addressing follows the UNS: every topic is `ecv1/{device}/{component}/{instance}/{class}[/channel]`,
+built and validated by the library — never a hand-assembled string. Telemetry rides the `data` class
+(`ecv1/{device}/ModbusAdapter/{instance}/data/{signal}`); discrete events ride `evt`; the on-demand
+command surface rides the library's `cmd` inbox; and the library owns `state` (a keepalive),
+`metric` (the health + system metrics), and `cfg` automatically. Every message carries a top-level
+**`identity`** element (`{hier, path, component, instance}`) placing the reading in the enterprise
+tree — routing and partitioning never parse the body or the topic. A fleet consumer needs one wildcard
+per class (`ecv1/+/+/+/data/#`, `…/evt/#`, `…/metric/#`, `…/state`), not per-adapter topic templates.
+
 ## Poll, not subscribe
 
 Modbus has no eventing — a device only answers requests. So instead of subscribing, the adapter
@@ -46,18 +57,30 @@ Two consequences worth internalizing:
 
 ## Two planes
 
-- **Data plane** — high-rate, fire-and-forget telemetry: `SouthboundSignalUpdate` out, `write` in.
-- **Control plane** — low-rate request/reply: on-demand `read`, and `status` / `signals` queries.
+- **Data plane** — high-rate, fire-and-forget telemetry: `SouthboundSignalUpdate` out on the `data`
+  class (through the library's `data()` facade); discrete events out on the `evt` class (through
+  `events()`) — a `critical` connection alarm (`evt/critical/connection`, raised on drop / cleared on
+  restore) and an `info`/`warning` write audit (`evt/{info|warning}/write`). Severity **derives** the
+  channel, so the topic and the body can never disagree.
+- **Control plane** — low-rate request/reply through the `cmd` inbox: `sb/write`, on-demand `sb/read`,
+  and `sb/status` / `sb/signals` / `reconnect` / `repoll` verbs.
 
-Keeping them separate means a consumer can fire a control query without perturbing the telemetry
-stream, and routing/partitioning can key on the data-plane topic alone.
+Keeping them separate means a consumer can fire a control verb without perturbing the telemetry
+stream, and routing/partitioning can key on the data-plane topic alone. The command inbox is a single
+`main`-instance subscription (`ecv1/{device}/ModbusAdapter/main/cmd/#`); a multi-instance adapter picks
+the target device with an `instance` field in the request body.
 
 ## Quality
 
 Every sample carries a normalized `quality` (`GOOD`/`BAD`/`UNCERTAIN`) plus `qualityRaw` (the native
-detail). A successful read is `GOOD`; a Modbus exception or timeout publishes `BAD` for every signal in
-the failed read block, with the exception text in `qualityRaw`, so a consumer sees an outage rather
-than a stale value silently persisting.
+detail). This is structural, not adapter discipline: the library's `data()` facade **requires** a
+quality on every sample it constructs, defaulting an omitted one to `GOOD` (Modbus has no native
+quality codes to report) and marking the synthesis `qualityRaw: "unspecified"` so a consumer can tell
+a synthesized `GOOD` from a device-reported one. A Modbus exception or timeout publishes `BAD` for
+every signal in the failed read block, with the exception text in `qualityRaw`, so a consumer sees an
+outage rather than a stale value silently persisting. (A block failure has no value at all to report —
+not even a "null" reading — so that one case goes through the facade's raw escape hatch rather than its
+normal value-required builder; see `publisher.py`'s module docstring.)
 
 ## Instances are independent
 

@@ -1,8 +1,10 @@
-"""One adapter, two Modbus servers at once (config-multi.json): plc1 -> :5020, plc2 -> :5021.
+"""One adapter, two Modbus servers at once (config-multi.json): plc1 -> :5020, plc2 -> :5021 (UNS).
 
-Confirms both instances stream concurrently with the correct per-instance identity (device.instance /
-endpoint), publish to distinct {InstanceId} topics, and that an on-demand read on each instance's topic
-routes to that server only. Start two sims (ports 5020, 5021) and the adapter on config-multi.json.
+Confirms both instances stream concurrently on their own UNS data topics with the correct per-instance
+identity (top-level identity.instance + body device.instance/endpoint), and that an on-demand read
+addressed (by the request-body 'instance' selector) to each instance routes to that server only. The
+command inbox is the shared main-instance inbox; the instance selector fans it out. Start two sims
+(ports 5020, 5021) and the adapter on config-multi.json.
 """
 import json
 import sys
@@ -12,6 +14,7 @@ from datetime import datetime, timezone
 
 import paho.mqtt.client as mqtt
 
+REPLY_PREFIX = "modbusval/reply"
 msgs = []
 checks = []
 
@@ -21,7 +24,8 @@ def check(name, ok, detail=""):
 
 
 def on_connect(c, u, f, rc, p=None):
-    c.subscribe("southbound/#")
+    c.subscribe("ecv1/+/+/+/data/#")
+    c.subscribe(f"{REPLY_PREFIX}/#")
 
 
 def on_message(c, u, msg):
@@ -32,19 +36,19 @@ def on_message(c, u, msg):
 
 
 def updates():
-    return [p for _, p in msgs if p.get("header", {}).get("name") == "SouthboundSignalUpdate"]
+    return [(t, p) for t, p in msgs if p.get("header", {}).get("name") == "SouthboundSignalUpdate"]
 
 
 def by_instance(inst):
-    return [p for p in updates() if p.get("body", {}).get("device", {}).get("instance") == inst]
+    return [p for _, p in updates() if p.get("body", {}).get("device", {}).get("instance") == inst]
 
 
-def request(c, topic, body, timeout=5):
+def request(c, cmd_base, verb, body, timeout=5):
     cid = str(uuid.uuid4())
-    reply = f"southbound/reply/{cid}"
-    h = {"name": "req", "correlation_id": cid, "reply_to": reply,
+    reply = f"{REPLY_PREFIX}/{cid}"
+    h = {"name": verb, "correlation_id": cid, "reply_to": reply,
          "timestamp": datetime.now(timezone.utc).isoformat(), "uuid": str(uuid.uuid4()), "version": "1.0"}
-    c.publish(topic, json.dumps({"header": h, "tags": {}, "body": body}))
+    c.publish(f"{cmd_base}/{verb}", json.dumps({"header": h, "tags": {}, "body": body}))
     deadline = time.time() + timeout
     while time.time() < deadline:
         for t, p in list(msgs):
@@ -52,6 +56,11 @@ def request(c, topic, body, timeout=5):
                 return p
         time.sleep(0.1)
     return None
+
+
+def result_of(reply):
+    b = (reply or {}).get("body", {})
+    return b.get("result", {}) if b.get("ok") else {}
 
 
 def main():
@@ -74,27 +83,39 @@ def main():
     check("plc2 streaming", len(p2) > 0, f"{len(p2)} updates")
     ep1 = {p["body"]["device"]["endpoint"] for p in p1}
     ep2 = {p["body"]["device"]["endpoint"] for p in p2}
-    check("plc1 endpoint :5020", any(":5020" in e for e in ep1), f"{ep1}")
-    check("plc2 endpoint :5021", any(":5021" in e for e in ep2), f"{ep2}")
+    check("plc1 endpoint reported", len(ep1) == 1 and all(e.startswith("tcp://") for e in ep1), f"{ep1}")
+    check("plc2 endpoint reported", len(ep2) == 1 and all(e.startswith("tcp://") for e in ep2), f"{ep2}")
     check("distinct endpoints", ep1 and ep2 and ep1.isdisjoint(ep2), f"{ep1} vs {ep2}")
 
-    comp = None
-    for t, p in msgs:
+    # distinct per-instance data topics (ecv1/{device}/{comp}/{instance}/data/...)
+    topics1 = {t for t, p in updates() if p["body"]["device"]["instance"] == "plc1"}
+    topics2 = {t for t, p in updates() if p["body"]["device"]["instance"] == "plc2"}
+    check("distinct data topics", all("/plc1/data/" in t for t in topics1)
+          and all("/plc2/data/" in t for t in topics2), f"{len(topics1)}|{len(topics2)}")
+
+    # command routing: derive device+component from an observed data topic, address each instance by body
+    device = comp = None
+    for t, p in updates():
         parts = t.split("/")
-        if len(parts) >= 5 and parts[3] == "plc1":
-            comp = parts[2]
+        if parts[3] == "plc1":
+            device, comp = parts[1], parts[2]
             break
-    if comp:
-        r1 = request(c, f"southbound/{comp}/plc1/read", {"signals": [{"name": "Counter16"}]})
-        r2 = request(c, f"southbound/{comp}/plc2/read", {"signals": [{"name": "Counter16"}]})
-        check("plc1 read routes", bool(r1) and r1["body"]["reads"][0]["quality"] == "GOOD")
-        check("plc2 read routes", bool(r2) and r2["body"]["reads"][0]["quality"] == "GOOD")
+    if device:
+        cmd_base = f"ecv1/{device}/{comp}/main/cmd"
+        r1 = request(c, cmd_base, "sb/read", {"instance": "plc1", "signals": [{"name": "Counter16"}]})
+        r2 = request(c, cmd_base, "sb/read", {"instance": "plc2", "signals": [{"name": "Counter16"}]})
+        check("plc1 read routes", bool(result_of(r1).get("reads")) and result_of(r1)["reads"][0]["quality"] == "GOOD")
+        check("plc2 read routes", bool(result_of(r2).get("reads")) and result_of(r2)["reads"][0]["quality"] == "GOOD")
+        # unknown instance -> coded error
+        rbad = request(c, cmd_base, "sb/read", {"instance": "plc9", "signals": [{"name": "Counter16"}]})
+        check("unknown instance errors", rbad is not None and rbad.get("body", {}).get("ok") is False
+              and rbad["body"]["error"]["code"] == "INSTANCE_NOT_FOUND", f"{(rbad or {}).get('body')}")
     else:
         check("component derivable", False)
 
     c.loop_stop()
     c.disconnect()
-    print("\n================ MODBUS MULTI-SERVER ================", flush=True)
+    print("\n================ MODBUS MULTI-SERVER (UNS) ================", flush=True)
     npass = nfail = 0
     for name, ok, detail in checks:
         print(f"  {'PASS' if ok else 'FAIL'}  {name:24} {detail}", flush=True)
