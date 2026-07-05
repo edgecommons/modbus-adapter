@@ -6,6 +6,7 @@ import time
 
 from pymodbus import FramerType
 from pymodbus.client import ModbusSerialClient, ModbusTcpClient
+from pymodbus.exceptions import ConnectionException, ModbusIOException
 
 from . import codec
 from .config.connection_info import RTU, RTU_TCP
@@ -26,7 +27,11 @@ class ModbusConnection:
         self._connected = False
 
     def is_connected(self) -> bool:
-        return bool(self.client is not None and getattr(self.client, "connected", False))
+        """LIVE liveness: whether the last read (or the initial connect) actually reached the slave.
+        Driven by the poll reads (see :meth:`read`) rather than pymodbus's cached ``client.connected``,
+        which reflects intent and LAGS a socket that died mid-session — so the #1c connectivity
+        provider reports disconnected promptly on a southbound loss instead of a stale "connected"."""
+        return self._connected
 
     def connect(self):
         """Block, retrying every RETRY_S, until the client is created and connected."""
@@ -72,16 +77,30 @@ class ModbusConnection:
 
     # --- reads / writes (raise ModbusError on failure) -------------------------------------
     def read(self, table, address, count, unit_id):
-        """Return a list of bits (coil/discrete) or registers (holding/input)."""
+        """Return a list of bits (coil/discrete) or registers (holding/input).
+
+        Doubles as the live liveness probe: any response that ARRIVES (data, or even a slave
+        ``ExceptionResponse`` for e.g. an illegal address) proves the slave is reachable →
+        ``_connected = True``; a transport/IO error — raised, a ``ModbusIOException`` response, or no
+        response — means the link is down → ``_connected = False``. The polls call this continuously,
+        so is_connected() tracks the live state rather than pymodbus's cached flag."""
         readers = {
             codec.COIL: self.client.read_coils,
             codec.DISCRETE: self.client.read_discrete_inputs,
             codec.HOLDING: self.client.read_holding_registers,
             codec.INPUT: self.client.read_input_registers,
         }
-        rr = readers[table](address, count=count, device_id=unit_id)
-        if rr is None or rr.isError():
-            raise ModbusError(str(rr))
+        try:
+            rr = readers[table](address, count=count, device_id=unit_id)
+        except (ConnectionException, ModbusIOException, OSError) as e:
+            self._connected = False                 # link down (raised transport/IO error)
+            raise ModbusError(str(e))
+        if rr is None or isinstance(rr, ModbusIOException):
+            self._connected = False                 # no response / IO error -> link down
+            raise ModbusError(str(rr) if rr is not None else "no response")
+        self._connected = True                       # a response arrived -> the slave is reachable
+        if rr.isError():
+            raise ModbusError(str(rr))               # reachable, but this register errored (e.g. illegal address)
         data = rr.bits if table in codec.BIT_TABLES else rr.registers
         return list(data[:count])
 
