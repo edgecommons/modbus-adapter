@@ -11,7 +11,7 @@ dependencies = [
     # Interim pin: the feat/unified-namespace branch (UNS not yet merged to main / no tag). Re-pin to
     # the released tag (e.g. @python-lib/v0.2.0) once it lands — see requirements.txt. Local dev uses
     # the sibling working tree via `pip install -e ../ggcommons/libs/python`.
-    "greengrass-commons @ git+https://github.com/edgecommons/ggcommons.git@feat/unified-namespace#subdirectory=libs/python",
+    "greengrass-commons @ git+https://github.com/edgecommons/ggcommons.git@python-lib/v0.2.0#subdirectory=libs/python",
     "pymodbus>=3.6",
 ]
 

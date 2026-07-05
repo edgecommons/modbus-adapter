@@ -2,5 +2,5 @@
 # and no python-lib/vX.Y.Z tag is cut). Re-pin to the released tag (e.g. @python-lib/v0.2.0) once the
 # branch merges to main and the tag is published — never bump this pin alone; it moves together with a
 # UNS-aware component. For local dev, `pip install -e ../ggcommons/libs/python` already satisfies this.
-greengrass-commons @ git+https://github.com/edgecommons/ggcommons.git@feat/unified-namespace#subdirectory=libs/python
+greengrass-commons @ git+https://github.com/edgecommons/ggcommons.git@python-lib/v0.2.0#subdirectory=libs/python
 pymodbus>=3.6
