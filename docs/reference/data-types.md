@@ -50,7 +50,7 @@ bytes are laid out. Two independent knobs cover the four real-world layouts:
   (`raw = round((value − offset) / scale)` for integer types). With no scale/offset an integer type
   stays an integer on the wire; **with** a scale it becomes a float.
 - **`bit`** (0–15, holding/input + `type: bool`): publishes a single bit of a register as a boolean.
-  Bit *writes* (read-modify-write) are not supported in v1 and are skipped with a warning.
+  Bit *writes* (read-modify-write) are not supported and are skipped with a warning.
 
 ## Published identity
 

@@ -135,7 +135,7 @@ first level (site) after `ecv1`.
 }
 ```
 
-## Accepted but not implemented
+## Limitations
 
 - **Single-bit writes** (a `bit` signal) require a read-modify-write and are skipped with a warning.
 - **Modbus security** (Modbus/TLS): not supported — classic Modbus is plaintext; secure the network

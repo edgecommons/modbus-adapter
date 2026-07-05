@@ -12,9 +12,9 @@ data/control plane model, see [explanation.md](../explanation.md); for client re
 
 ## Envelope
 
-All messages use the GGCommons JSON envelope — since the UNS change, `{header, identity, tags, body}`.
+All messages use the GGCommons JSON envelope: `{header, identity, tags, body}`.
 The library stamps the top-level **`identity`** (`{hier, path, component, instance}`) on every message
-built from config; the former `tags.thing` is removed. `tags` is arbitrary business metadata.
+built from config. `tags` is arbitrary business metadata.
 Request/reply carries `header.reply_to` + `header.correlation_id`; the reply is published to
 `reply_to` with the same `correlation_id`.
 
@@ -50,8 +50,8 @@ facades and `cmd` replies via the command inbox — never a hand-assembled topic
 ## The command inbox
 
 The read/write/control surface is served through the library's **command inbox** — a single
-subscription `ecv1/{device}/ModbusAdapter/main/cmd/#` (the shared `main` instance; per-instance inboxes
-are a later UNS phase). A request's **verb** is the topic channel after `cmd/` and must equal
+subscription `ecv1/{device}/ModbusAdapter/main/cmd/#` (the shared `main` instance; there are no
+per-instance inboxes). A request's **verb** is the topic channel after `cmd/` and must equal
 `header.name`. Built-in verbs (`ping`, `reload-config`, `get-configuration`) ship with every component;
 the adapter adds the `sb/*` + `reconnect`/`repoll` verbs below.
 
@@ -81,8 +81,7 @@ than emitting it `null`, and defaults an omitted `quality` to `GOOD` with `quali
 
 ### `SouthboundSignalUpdate` (adapter → bus, `data` class)
 
-Published through the library's `data()` facade (`gg.instance(id).data()` —
-`docs/platform/DESIGN-class-facades.md` §2.1), which constructs the body, sanitizes the channel, mints
+Published through the library's `data()` facade (`gg.instance(id).data()`), which constructs the body, sanitizes the channel, mints
 the topic, and stamps the envelope identity — the adapter only ever calls
 `.signal(id).name(n).address(a).device(...).add_samples(...).signal_path(p).publish()`. Topic
 `ecv1/{device}/ModbusAdapter/{instance}/data/{signal}` — `{signal}` is the sanitized signal name. The
@@ -144,8 +143,7 @@ Unresolvable refs are omitted (match by `signal`). A signal that errors returns 
 
 ## Events (`evt` class)
 
-Published through the library's `events()` facade (`gg.instance(id).events()` —
-`docs/platform/DESIGN-class-facades.md` §2.2): severity **derives** the channel
+Published through the library's `events()` facade (`gg.instance(id).events()`): severity **derives** the channel
 `evt/{severity}/{type}`, so the topic and the body can never disagree — identical in shape to the
 OPC UA reference adapter.
 

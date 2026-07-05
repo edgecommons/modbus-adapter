@@ -315,8 +315,8 @@ chars → `_`). With thing name `gw-01`, `hierarchy.levels = [site, area, line, 
 | `RunCmd` (coil 0, u1) | `ecv1/gw-01/ModbusAdapter/skid1/data/RunCmd` |
 | `AlarmHigh` (holding 16 bit 0, u1) | `ecv1/gw-01/ModbusAdapter/skid1/data/AlarmHigh` |
 
-The enterprise location rides the top-level `identity` element, not the topic (and no longer in
-`tags`): `identity.path = "plant1/pumphouse/5/gw-01"`. A fleet consumer subscribes one wildcard
+The enterprise location rides the top-level `identity` element, not the topic:
+`identity.path = "plant1/pumphouse/5/gw-01"`. A fleet consumer subscribes one wildcard
 `ecv1/+/+/+/data/#` rather than per-signal templates.
 
 **Worked example — `AlarmHigh`.** It reads bit 0 of `StatusWord` on `unitId 1`; its topic is
@@ -366,7 +366,7 @@ transitions as discrete events (not just polled `data`), consume the adapter's s
 | signal `byteOrder` | Order of bytes within each register. `big` (default)/`little`. The two knobs cover ABCD/BADC/CDAB/DCBA. Wrong order = right magnitude class, garbled value. |
 | signal `scale` / `offset` | Linear transform `value = raw × scale + offset` on read (inverted on write). Converts raw counts to engineering units; a scaled integer is emitted as a float. |
 | signal `count` | Registers a `string` spans (2 UTF-8 bytes each). Required for `string`. |
-| signal `bit` (0–15) | Publishes a single bit of a holding/input register as a boolean. Only valid with `type: bool` on a register table. Bit *writes* (read-modify-write) are not implemented. |
+| signal `bit` (0–15) | Publishes a single bit of a holding/input register as a boolean. Only valid with `type: bool` on a register table. Bit *writes* (read-modify-write) are not supported. |
 | signal `deadband` | Per-signal change filter under `onChange`: `none` (any change), `absolute` (`|new−old| ≥ value`), `percent` (`|new−old| ≥ value%` of old; any change when old is `0`). Non-numeric signals (bool/string) publish on any change. |
 | signal `name` | The sanitized `data`-class channel token (`.../data/<name>`) and the friendly write/read ref; `signal.id`/`signal.address` in the body are what consumers key on. |
 
@@ -391,7 +391,7 @@ transitions as discrete events (not just polled `data`), consume the adapter's s
 Everything above publishes to the **local bus** — Greengrass IPC on the `GREENGRASS` platform, the
 local MQTT broker on `HOST`/`KUBERNETES`. That is the adapter's data plane: `SignalUpdatePublisher` sends
 every `SouthboundSignalUpdate` on the UNS `data` class through the instance's `data()` facade (which
-constructs the body and mints the topic — `docs/platform/DESIGN-class-facades.md` §2.1), and
+constructs the body and mints the topic), and
 the read/write/control surface is served by the library **command inbox**
 (`ecv1/{device}/ModbusAdapter/main/cmd/#`) — both on the default provider channel (the local broker on
 HOST, IPC on Greengrass). On-box consumers read those topics.
