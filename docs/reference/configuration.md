@@ -40,7 +40,6 @@ library from the identity above; there are no per-instance/per-signal topic temp
 | Key | Type | Definition |
 |-----|------|-----------|
 | `id` | string | Stable instance id; the `{instance}` token of the `data`/`evt` topics and `device.instance`. |
-| `adapter` | string | Informational; echoed as `device.adapter` (`"modbus"`). |
 | `connection` | object | Transport + endpoint (below). |
 | `defaults` | object | Per-instance overrides of `global.defaults`. |
 | `publish` | object | `batchMs` (buffer window). |

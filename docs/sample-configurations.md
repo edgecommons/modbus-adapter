@@ -539,7 +539,6 @@ ComponentConfiguration:
           defaults: { pollIntervalMs: 1000, publishMode: "onChange", maxGap: 8 }
         instances:
           - id: "plc1"
-            adapter: "modbus"
             connection: { transport: "tcp", host: "10.0.0.50", port: 502, unitId: 1, timeoutMs: 1000 }
             publish: { batchMs: 0 }
             write:   { enabled: true }
@@ -558,7 +557,6 @@ ComponentConfiguration:
 | `--platform GREENGRASS` (in the recipe `Run`) | Selects IPC messaging and `GG_CONFIG` as the config source; publishes route through the Nucleus rather than a broker. The recipe's `accessControl` grants pub/sub on IPC and IoT Core. |
 | `heartbeat.*` | Standard ggcommons heartbeat — the UNS `state` keepalive (`ecv1/{device}/ModbusAdapter/main/state`) plus CPU/memory/disk `sys` measures. Independent of Modbus polling; `destination` (default `local`) is the local channel on GG IPC. |
 | `metricEmission.target: log` | Routes the `southbound_health` metric to a rotating log file (vs `messaging`/`cloudwatch`/`prometheus`). `{ComponentFullName}` resolves to the deployed component name. |
-| `adapter: "modbus"` | Informational only; echoed as `device.adapter` in every message. |
 | signal `scale` | `Scaled` publishes `raw × 0.1` (raw `123` → `12.3`); a scaled integer is emitted as a float. |
 
 On startup each instance's `connect()` **blocks and retries every 5 s** until the device answers, so a
@@ -685,7 +683,10 @@ next interval. The `southbound_health` metric's `connectionState` (1/0) and `rea
 it is emitted to `metricEmission.target` (auto-routing to the UNS `metric` class under `messaging`) and
 queryable via the `sb/status` command verb. A link up/down transition also raises/clears a `critical`
 alarm on `evt/critical/connection` immediately (the same channel for the drop and the restore, so a
-console tracking `evt/critical/#` sees both ends).
+console tracking `evt/critical/#` sees both ends). Each instance's current up/down state is additionally
+surfaced per-slave in the `main` `state` keepalive's `instances[]` array (`{instance, connected, detail}`),
+driven by the same live poll reads (not a cached client flag), so a mid-session loss reads
+`connected: false` promptly.
 
 ### Reads vs writes (the command surface)
 

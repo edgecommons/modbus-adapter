@@ -133,7 +133,9 @@ the Downward API).
 - **Metric** `southbound_health` (`connectionState`, `readErrors`) — with `metricEmission.target:
   messaging` it auto-publishes on the UNS `metric` class
   (`ecv1/{device}/ModbusAdapter/main/metric/southbound_health`); `log`/`cloudwatch`/`prometheus` also work.
-- **State keepalive:** the library publishes `ecv1/{device}/ModbusAdapter/main/state` every ~5 s.
+- **State keepalive:** the library publishes `ecv1/{device}/ModbusAdapter/main/state` every ~5 s; the
+  RUNNING keepalive also carries an `instances[]` array (`{instance, connected, detail}`) — each
+  configured slave's live up/down state and endpoint.
 - **Events:** `evt/critical/connection` (link up/down per instance, a stateful alarm — raised on
   drop, cleared on restore) and `evt/{info|warning}/write` (write audit) on the `evt` class; severity
   derives the channel.

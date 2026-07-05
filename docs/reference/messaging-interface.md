@@ -181,6 +181,35 @@ topic itself.
 
 Dimension: `instance` (plus auto `coreName`/`component`).
 
+## State keepalive (`state` class, reserved — automatic)
+
+The library's heartbeat publishes the `state` keepalive on the reserved `state` class
+(`ecv1/{device}/ModbusAdapter/main/state`) every ~5 s — the component never addresses that topic
+itself. The RUNNING keepalive also carries an **`instances`** array: one entry per configured slave
+(`component.instances[]`), so a fleet consumer sees every slave's up/down state under the one component
+without a separate UNS instance per slave (identity, data, and lifecycle stay under `main`).
+
+```jsonc
+"body": {
+  "status": "RUNNING",
+  "uptimeSecs": 3600,
+  "instances": [
+    { "instance": "plc1", "connected": true,  "detail": "tcp://10.0.0.50:502 unit=1" },
+    { "instance": "plc2", "connected": false }
+  ]
+}
+```
+
+- `connected` — **live liveness**, driven by the poll reads themselves: any response that arrives (data,
+  or even a slave exception for e.g. an illegal address) marks the link up; a transport/IO error, a
+  `ModbusIOException`, or no response marks it down. It is *not* pymodbus's cached `client.connected`
+  (which reflects intent and lags a socket that died mid-session), so a mid-session southbound loss shows
+  up promptly as `connected: false` on the next keepalive.
+- `detail` — the connection describe string (`tcp://host:port unit=N` / `rtu://COM@baud unit=N`); omitted
+  before that slave's device has connected (`connected` is then `false`).
+- `instances` is present **only** on the RUNNING keepalive (the best-effort `STOPPED` shutdown state, and
+  a keepalive with no configured slaves, omit it).
+
 ## CLI
 
 | Flag | Values | Notes |
