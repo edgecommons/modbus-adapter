@@ -8,9 +8,9 @@ version = "1.0.0"
 description = "EdgeCommons Modbus southbound adapter — the Python reference protocol adapter"
 requires-python = ">=3.9"
 dependencies = [
-    # Pinned to the released tag @python-lib/v0.2.0 (the UNS core, merged to main) — see requirements.txt.
+    # Pinned to the current rebranded core commit until the next Python library tag is cut.
     # Local dev uses the sibling working tree via `pip install -e ../core/libs/python`.
-    "edgecommons @ git+https://github.com/edgecommons/edgecommons.git@python-lib/v0.2.0#subdirectory=libs/python",
+    "edgecommons @ git+https://github.com/edgecommons/edgecommons.git@56a706c8cc16ec870c6f2f81f1c118ba0cebb691#subdirectory=libs/python",
     "pymodbus>=3.6",
 ]
 
