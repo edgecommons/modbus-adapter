@@ -49,7 +49,7 @@ class FakeConn:
 
 
 class FakeMessaging:
-    """Records publish(topic, msg)/publish_to_iot_core(topic, msg, qos) calls -- the
+    """Records publish(topic, msg)/publish_northbound(topic, msg, qos) calls -- the
     ``messaging_client`` the ``data()``/``events()`` facades publish through."""
 
     def __init__(self):
@@ -58,7 +58,7 @@ class FakeMessaging:
     def publish(self, topic, msg):
         self.published.append((topic, msg))
 
-    def publish_to_iot_core(self, topic, msg, qos):
+    def publish_northbound(self, topic, msg, qos):
         self.published.append((topic, msg))
 
 

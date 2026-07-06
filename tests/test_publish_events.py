@@ -57,7 +57,7 @@ def test_publish_swallows_broker_error():
         def publish(self, *a, **k):
             raise RuntimeError("broker down")
 
-        def publish_to_iot_core(self, *a, **k):
+        def publish_northbound(self, *a, **k):
             raise RuntimeError("broker down")
 
     pub = SignalUpdatePublisher(FakeInstance(Boom()).data(), config)
@@ -156,7 +156,7 @@ def test_event_emit_never_raises():
         def publish(self, *a, **k):
             raise RuntimeError("x")
 
-        def publish_to_iot_core(self, *a, **k):
+        def publish_northbound(self, *a, **k):
             raise RuntimeError("x")
 
     EventEmitter(FakeInstance(Boom()).events()).write(False, "sig", 1, "x")   # must not raise

@@ -399,14 +399,14 @@ HOST, IPC on Greengrass). On-box consumers read those topics.
 **What the adapter sends to the cloud itself.** The one northbound path the adapter wires directly is
 its own *operational* telemetry — the heartbeat and the health metric. The library can deliver them
 straight to AWS IoT Core alongside the local bus: on `HOST`/`KUBERNETES` the dual-MQTT provider holds
-the IoT Core mTLS session next to the local one. Opt in with `messaging.iotCore` plus a heartbeat /
-metric target set to `destination: "iotcore"`:
+the northbound mTLS session next to the local one. Opt in with `messaging.northbound` plus a heartbeat /
+metric target set to `destination: "northbound"`:
 
 ```jsonc
 {
   "messaging": {
     "local":   { "type": "mqtt", "host": "localhost", "port": 1883, "clientId": "modbus-skid1" },
-    "iotCore": {
+    "northbound": {
       "endpoint": "a1b2c3d4e5f6g7-ats.iot.us-east-1.amazonaws.com",
       "port": 8883,
       "clientId": "modbus-skid1",
@@ -432,10 +432,10 @@ metric target set to `destination: "iotcore"`:
 ```
 
 The heartbeat keepalive rides the UNS `state` class and the metric the `metric` class automatically —
-`destination: iotcore` routes those reserved-class publishes to IoT Core instead of the local broker.
+`destination: "northbound"` routes those reserved-class publishes to IoT Core instead of the local broker.
 
-On `GREENGRASS` the same `destination: "iotcore"` routes through the Nucleus' IoT Core connection, so
-`messaging.iotCore` is not needed there.
+On `GREENGRASS` the same `destination: "northbound"` routes through the Nucleus' IoT Core connection, so
+`messaging.northbound` is not needed there.
 
 **Forwarding the register data itself.** The adapter does **not** push polled register telemetry
 off-box — it publishes locally and stops there. Getting that data to the cloud is a deployment
