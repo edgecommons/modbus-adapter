@@ -15,7 +15,7 @@ the **poll-based** reference; OPC UA is the subscribe-based one.
 
 Addressing follows the UNS: every topic is `ecv1/{device}/{component}/{instance}/{class}[/channel]`,
 built and validated by the library — never a hand-assembled string. Telemetry rides the `data` class
-(`ecv1/{device}/ModbusAdapter/{instance}/data/{signal}`); discrete events ride `evt`; the on-demand
+(`ecv1/{device}/modbus-adapter/{instance}/data/{signal}`); discrete events ride `evt`; the on-demand
 command surface rides the library's `cmd` inbox; and the library owns `state` (a keepalive — whose
 RUNNING body also carries each configured slave's live connectivity in an `instances[]` array),
 `metric` (the health + system metrics), and `cfg` automatically. Every message carries a top-level
@@ -68,7 +68,7 @@ Two consequences worth internalizing:
 
 Keeping them separate means a consumer can fire a control verb without perturbing the telemetry
 stream, and routing/partitioning can key on the data-plane topic alone. The command inbox is a single
-`main`-instance subscription (`ecv1/{device}/ModbusAdapter/main/cmd/#`); a multi-instance adapter picks
+`main`-instance subscription (`ecv1/{device}/modbus-adapter/main/cmd/#`); a multi-instance adapter picks
 the target device with an `instance` field in the request body.
 
 ## Quality

@@ -3,10 +3,10 @@ status / signals / reconnect / repoll control queries.
 
 Since the UNS migration these are served through the library-owned **command inbox** (the
 ``gg.get_commands()`` facade) rather than per-instance legacy topics: ``main.py`` registers the verbs
-once on the shared ``main``-instance inbox (``ecv1/{device}/ModbusAdapter/main/cmd/#``) and dispatches
+once on the shared ``main``-instance inbox (``ecv1/{device}/modbus-adapter/main/cmd/#``) and dispatches
 each into the right device by the request body's ``instance`` selector. Each method here returns the
 verb result object (which the inbox wraps as ``{"ok": true, "result": ...}``) or raises
-:class:`~ggcommons.command_inbox.CommandException` for a coded error reply.
+:class:`~edgecommons.command_inbox.CommandException` for a coded error reply.
 
 A signal-ref is either ``{"name": "<configured signal>"}`` (friendly, stable) or an explicit
 ``{"unitId?, table, address, type, ...}`` for arbitrary access — the Modbus analog of OPC UA's
@@ -15,7 +15,7 @@ A signal-ref is either ``{"name": "<configured signal>"}`` (friendly, stable) or
 import logging
 from datetime import datetime, timezone
 
-from ggcommons.command_inbox import CommandException
+from edgecommons.command_inbox import CommandException
 
 from . import codec
 from .config.signal_spec import SignalSpec

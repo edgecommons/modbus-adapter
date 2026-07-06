@@ -1,18 +1,18 @@
 """Shared test doubles: an in-memory Modbus connection, a recording messaging client + a real
-``GgInstance`` bound to it (so the publisher/events unit tests exercise the real ggcommons
+``EdgeCommonsInstance`` bound to it (so the publisher/events unit tests exercise the real edgecommons
 ``data()``/``events()`` facades -- DESIGN-class-facades -- instead of a hand-rolled uns()/
 new_message() fake), and a ServerConfiguration factory."""
 import types
 from collections import defaultdict
 
-from ggcommons.gg_instance import GgInstance
-from ggcommons.messaging.identity import HierEntry, MessageIdentity
+from edgecommons.edgecommons_instance import EdgeCommonsInstance
+from edgecommons.messaging.identity import HierEntry, MessageIdentity
 
 from modbus_adapter.config.server_configuration import ServerConfiguration
 
-#: The identity the fake GgInstance is bound to -- mirrors the pre-migration fake's
-#: ``ecv1/thing1/ModbusAdapter/plc1/...`` topic shape (device=thing1, component=ModbusAdapter).
-IDENTITY = MessageIdentity([HierEntry("device", "thing1")], "ModbusAdapter", "plc1")
+#: The identity the fake EdgeCommonsInstance is bound to -- mirrors the pre-migration fake's
+#: ``ecv1/thing1/modbus-adapter/plc1/...`` topic shape (device=thing1, component=modbus-adapter).
+IDENTITY = MessageIdentity([HierEntry("device", "thing1")], "modbus-adapter", "plc1")
 
 
 class FakeConn:
@@ -84,13 +84,13 @@ class _FakeConfigManager:
 
 
 def FakeInstance(messaging=None, instance_id="plc1"):
-    """A real :class:`~ggcommons.gg_instance.GgInstance` bound to a fake identity/messaging --
+    """A real :class:`~edgecommons.edgecommons_instance.EdgeCommonsInstance` bound to a fake identity/messaging --
     exercises the real ``data()``/``events()`` facades (DESIGN-class-facades) so the publisher/
     events tests pin the real body/topic contract instead of a hand-rolled fake. Drop-in
     replacement for the pre-migration ``FakeInstance`` (same default topic shape:
-    ``ecv1/thing1/ModbusAdapter/plc1/...``)."""
+    ``ecv1/thing1/modbus-adapter/plc1/...``)."""
     messaging = messaging if messaging is not None else FakeMessaging()
-    return GgInstance(instance_id, _FakeConfigManager(), False, messaging_client=messaging)
+    return EdgeCommonsInstance(instance_id, _FakeConfigManager(), False, messaging_client=messaging)
 
 
 class FakeEvents:

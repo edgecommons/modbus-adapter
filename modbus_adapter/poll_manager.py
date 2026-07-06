@@ -9,7 +9,7 @@ import threading
 import time
 from collections import defaultdict
 
-from ggcommons.facades.quality import Quality
+from edgecommons.facades.quality import Quality
 
 from . import codec
 from .config.poll_group import ALWAYS

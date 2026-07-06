@@ -1,12 +1,12 @@
-"""GGCommons Modbus adapter entry point.
+"""EdgeCommons Modbus adapter entry point.
 
 Builds the framework, then spawns one worker thread per ``component.instances[]`` entry — each runs a
 ModbusDevice (its connection blocks/retries independently, so one device down doesn't affect the
 others). The library owns SIGTERM/SIGINT → graceful shutdown.
 
 The on-demand command surface is served through the library's **command inbox**
-(``gg.get_commands()``): the verbs are registered once here on the shared ``main``-instance inbox
-(``ecv1/{device}/ModbusAdapter/main/cmd/#``) and dispatched into the right device by the request
+(``runtime.get_commands()``): the verbs are registered once here on the shared ``main``-instance inbox
+(``ecv1/{device}/modbus-adapter/main/cmd/#``) and dispatched into the right device by the request
 body's ``instance`` selector (the shipped inbox is ``main``-instance only; per-instance inboxes are a
 later UNS phase). Data (``data``), events (``evt``), the ``state`` keepalive, the ``southbound_health``
 + ``sys`` metrics, and the ``cfg`` publisher all ride the UNS classes automatically.
@@ -16,9 +16,9 @@ import logging
 import sys
 import threading
 
-from ggcommons import GGCommonsBuilder
-from ggcommons.command_inbox import CommandException
-from ggcommons.heartbeat.instance_connectivity import InstanceConnectivity
+from edgecommons import EdgeCommonsBuilder
+from edgecommons.command_inbox import CommandException
+from edgecommons.heartbeat.instance_connectivity import InstanceConnectivity
 
 from modbus_adapter.config.server_configuration import ServerConfiguration
 from modbus_adapter.device import ModbusDevice
@@ -32,17 +32,17 @@ def _body(request):
 
 
 def main():
-    arg_parser = argparse.ArgumentParser(description="GGCommons Modbus adapter")
-    gg = (
-        GGCommonsBuilder.create("com.mbreissi.modbus.ModbusAdapter")
+    arg_parser = argparse.ArgumentParser(description="EdgeCommons Modbus adapter")
+    runtime = (
+        EdgeCommonsBuilder.create("com.mbreissi.edgecommons.ModbusAdapter")
         .with_args(sys.argv[1:])
         .with_app_options(arg_parser)
         .build()
     )
-    config_manager = gg.get_config_manager()
+    config_manager = runtime.get_config_manager()
 
     logger.info("Starting Modbus adapter (thing=%s)", config_manager.get_thing_name())
-    gg.set_ready(False)
+    runtime.set_ready(False)
 
     global_config = config_manager.get_global_config()
     devices = {}                              # instance_id -> ModbusDevice (populated as each connects)
@@ -65,7 +65,7 @@ def main():
     # Register the Modbus command verbs on the shared main-instance inbox (once). Handlers fan out to
     # the addressed device; each returns the verb result (wrapped as {"ok":true,"result":...}) or
     # raises CommandException for a coded error reply.
-    commands = gg.get_commands()
+    commands = runtime.get_commands()
     if commands is not None:
         commands.register("sb/read", lambda req: resolve_device(_body(req)).commands.read(_body(req)))
         commands.register("sb/write", lambda req: resolve_device(_body(req)).commands.write(_body(req)))
@@ -89,14 +89,14 @@ def main():
             out.append(InstanceConnectivity.of(iid, connected, detail))
         return out
 
-    gg.set_instance_connectivity_provider(_instance_connectivity)
+    runtime.set_instance_connectivity_provider(_instance_connectivity)
 
     def worker(instance_id):
         try:
             server_config = ServerConfiguration(config_manager, global_config, instance_id)
-            device = ModbusDevice(gg, server_config)
+            device = ModbusDevice(runtime, server_config)
             devices[server_config.id] = device
-            gg.set_ready(True)            # ready once at least one device is connected + polling
+            runtime.set_ready(True)            # ready once at least one device is connected + polling
         except Exception:                 # noqa: BLE001
             logger.exception("[%s] failed to start device", instance_id)
 
@@ -112,7 +112,7 @@ def main():
                 d.stop()
             except Exception:             # noqa: BLE001
                 pass
-        gg.shutdown()
+        runtime.shutdown()
 
 
 if __name__ == "__main__":

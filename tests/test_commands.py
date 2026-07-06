@@ -2,7 +2,7 @@
 reconnect / repoll — using in-memory fakes (no live broker or PLC)."""
 import pytest
 
-from ggcommons.command_inbox import CommandException
+from edgecommons.command_inbox import CommandException
 
 from modbus_adapter.command_service import CommandService
 from tests._fakes import FakeConn, FakeEvents, FakePoller, make_config

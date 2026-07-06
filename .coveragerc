@@ -1,4 +1,4 @@
-# Coverage is scoped to the CI-testable surface, matching the org convention (the ggcommons libraries
+# Coverage is scoped to the CI-testable surface, matching the org convention (the edgecommons libraries
 # scope their 90% gate the same way): pure protocol/normalization/command logic is unit-tested here,
 # while the live-infra paths are exercised by the validation/ HOST smoke against EMQX + a Modbus sim.
 #

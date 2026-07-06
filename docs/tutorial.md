@@ -38,19 +38,19 @@ Subscribe to the UNS data class (any MQTT client) — one wildcard covers the wh
 mosquitto_sub -t 'ecv1/+/+/+/data/#' -v
 ```
 
-You'll see `SouthboundSignalUpdate` messages on `ecv1/modbus-thing/ModbusAdapter/plc1/data/{signal}`
+You'll see `SouthboundSignalUpdate` messages on `ecv1/modbus-thing/modbus-adapter/plc1/data/{signal}`
 for the changing signals (e.g. `Counter16`, `Temp`), each with a `value`, normalized `quality`, a
 Modbus `address` (`{unitId, table, address, type}`), and the top-level `identity`. (Also try
 `ecv1/+/+/+/state` for the keepalive and `ecv1/+/+/+/metric/#` for `southbound_health`.)
 
 ## 5. Read a signal on demand
 
-Read/write go through the command inbox (`ecv1/{device}/ModbusAdapter/main/cmd/{verb}`); set
-`header.name` to the verb and `reply_to` to a topic you subscribe. With a GGCommons client this is one
+Read/write go through the command inbox (`ecv1/{device}/modbus-adapter/main/cmd/{verb}`); set
+`header.name` to the verb and `reply_to` to a topic you subscribe. With a EdgeCommons client this is one
 `request()` call; raw MQTT:
 
 ```
-publish ecv1/modbus-thing/ModbusAdapter/main/cmd/sb/read
+publish ecv1/modbus-thing/modbus-adapter/main/cmd/sb/read
   {"header":{"name":"sb/read","reply_to":"app/r","correlation_id":"1"},"body":{"signals":[{"name":"Scaled"}]}}
 subscribe app/r   →  { "ok": true, "result": { "reads": [ { "value": 25.0, ... } ] } }   # raw 250 × scale 0.1
 ```
@@ -58,7 +58,7 @@ subscribe app/r   →  { "ok": true, "result": { "reads": [ { "value": 25.0, ...
 ## 6. Write a signal
 
 ```
-publish ecv1/modbus-thing/ModbusAdapter/main/cmd/sb/write
+publish ecv1/modbus-thing/modbus-adapter/main/cmd/sb/write
   {"header":{"name":"sb/write","reply_to":"app/r","correlation_id":"2"},
    "body":{"writes":[{"name":"RWFloat32","value":42.5}]}}      # a writable holding/coil signal
 ```

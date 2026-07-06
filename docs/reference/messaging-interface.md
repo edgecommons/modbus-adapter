@@ -6,13 +6,13 @@ data/control plane model, see [explanation.md](../explanation.md); for client re
 [how-to guides](../how-to-guides.md).
 
 - `{device}` — the resolved Thing name (the last `hierarchy` level).
-- `{component}` — the sanitized component short name, `ModbusAdapter`.
+- `{component}` — the component UNS token, `modbus-adapter`.
 - `{instance}` — a device instance id (`plc1`, …) for `data`/`evt`; `main` for the shared command
   inbox, the `state` keepalive, and `metric`.
 
 ## Envelope
 
-All messages use the GGCommons JSON envelope: `{header, identity, tags, body}`.
+All messages use the EdgeCommons JSON envelope: `{header, identity, tags, body}`.
 The library stamps the top-level **`identity`** (`{hier, path, component, instance}`) on every message
 built from config. `tags` is arbitrary business metadata.
 Request/reply carries `header.reply_to` + `header.correlation_id`; the reply is published to
@@ -22,7 +22,7 @@ Request/reply carries `header.reply_to` + `header.correlation_id`; the reply is 
 "identity": {
   "hier": [ { "level": "site", "value": "lab" }, { "level": "shop", "value": "s1" },
             { "level": "line", "value": "l1" }, { "level": "device", "value": "gw-01" } ],
-  "path": "lab/s1/l1/gw-01", "component": "ModbusAdapter", "instance": "plc1"
+  "path": "lab/s1/l1/gw-01", "component": "modbus-adapter", "instance": "plc1"
 }
 ```
 
@@ -30,16 +30,16 @@ Request/reply carries `header.reply_to` + `header.correlation_id`; the reply is 
 
 | Class | Message | Direction | Topic | Reply |
 |-------|---------|-----------|-------|-------|
-| `data` | `SouthboundSignalUpdate` | adapter → bus | `ecv1/{device}/ModbusAdapter/{instance}/data/{signal}` | — |
-| `evt` | `evt` | adapter → bus | `ecv1/{device}/ModbusAdapter/{instance}/evt/{severity}/{connection\|write}` | — |
-| `cmd` | `sb/read` | bus → adapter | `ecv1/{device}/ModbusAdapter/main/cmd/sb/read` | `{ok,result}` |
-| `cmd` | `sb/write` | bus → adapter | `ecv1/{device}/ModbusAdapter/main/cmd/sb/write` | `{ok,result}` |
-| `cmd` | `sb/status` | bus → adapter | `ecv1/{device}/ModbusAdapter/main/cmd/sb/status` | `{ok,result}` |
-| `cmd` | `sb/signals` | bus → adapter | `ecv1/{device}/ModbusAdapter/main/cmd/sb/signals` | `{ok,result}` |
-| `cmd` | `reconnect` | bus → adapter | `ecv1/{device}/ModbusAdapter/main/cmd/reconnect` | `{ok,result}` |
-| `cmd` | `repoll` | bus → adapter | `ecv1/{device}/ModbusAdapter/main/cmd/repoll` | `{ok,result}` |
-| `metric` | `southbound_health` | adapter → bus (auto) | `ecv1/{device}/ModbusAdapter/main/metric/southbound_health` | — |
-| `state` | keepalive | adapter → bus (auto) | `ecv1/{device}/ModbusAdapter/main/state` | — |
+| `data` | `SouthboundSignalUpdate` | adapter → bus | `ecv1/{device}/modbus-adapter/{instance}/data/{signal}` | — |
+| `evt` | `evt` | adapter → bus | `ecv1/{device}/modbus-adapter/{instance}/evt/{severity}/{connection\|write}` | — |
+| `cmd` | `sb/read` | bus → adapter | `ecv1/{device}/modbus-adapter/main/cmd/sb/read` | `{ok,result}` |
+| `cmd` | `sb/write` | bus → adapter | `ecv1/{device}/modbus-adapter/main/cmd/sb/write` | `{ok,result}` |
+| `cmd` | `sb/status` | bus → adapter | `ecv1/{device}/modbus-adapter/main/cmd/sb/status` | `{ok,result}` |
+| `cmd` | `sb/signals` | bus → adapter | `ecv1/{device}/modbus-adapter/main/cmd/sb/signals` | `{ok,result}` |
+| `cmd` | `reconnect` | bus → adapter | `ecv1/{device}/modbus-adapter/main/cmd/reconnect` | `{ok,result}` |
+| `cmd` | `repoll` | bus → adapter | `ecv1/{device}/modbus-adapter/main/cmd/repoll` | `{ok,result}` |
+| `metric` | `southbound_health` | adapter → bus (auto) | `ecv1/{device}/modbus-adapter/main/metric/southbound_health` | — |
+| `state` | keepalive | adapter → bus (auto) | `ecv1/{device}/modbus-adapter/main/state` | — |
 
 Fleet consumers subscribe the six UNS wildcards — telemetry is one filter,
 `ecv1/+/+/+/data/#`; events `ecv1/+/+/+/evt/#`; metrics `ecv1/+/+/+/metric/#`; state
@@ -50,7 +50,7 @@ facades and `cmd` replies via the command inbox — never a hand-assembled topic
 ## The command inbox
 
 The read/write/control surface is served through the library's **command inbox** — a single
-subscription `ecv1/{device}/ModbusAdapter/main/cmd/#` (the shared `main` instance; there are no
+subscription `ecv1/{device}/modbus-adapter/main/cmd/#` (the shared `main` instance; there are no
 per-instance inboxes). A request's **verb** is the topic channel after `cmd/` and must equal
 `header.name`. Built-in verbs (`ping`, `reload-config`, `get-configuration`) ship with every component;
 the adapter adds the `sb/*` + `reconnect`/`repoll` verbs below.
@@ -84,7 +84,7 @@ than emitting it `null`, and defaults an omitted `quality` to `GOOD` with `quali
 Published through the library's `data()` facade (`gg.instance(id).data()`), which constructs the body, sanitizes the channel, mints
 the topic, and stamps the envelope identity — the adapter only ever calls
 `.signal(id).name(n).address(a).device(...).add_samples(...).signal_path(p).publish()`. Topic
-`ecv1/{device}/ModbusAdapter/{instance}/data/{signal}` — `{signal}` is the sanitized signal name. The
+`ecv1/{device}/modbus-adapter/{instance}/data/{signal}` — `{signal}` is the sanitized signal name. The
 stable `signal.id` and protocol-native `signal.address` stay in the body (consumers key on those, not
 the topic channel). Quality has no Modbus-native meaning, so a successful read omits it and the facade
 defaults it to `GOOD` with `qualityRaw: "unspecified"` (a synthesized-vs-device-reported marker); a
@@ -169,7 +169,7 @@ per-adapter knowledge of the channel shape.
 ### `southbound_health` (metric, reserved class — automatic)
 
 The metric subsystem publishes it on the reserved `metric` class
-(`ecv1/{device}/ModbusAdapter/main/metric/southbound_health`) — the component never addresses that
+(`ecv1/{device}/modbus-adapter/main/metric/southbound_health`) — the component never addresses that
 topic itself.
 
 | Measure | Unit | Meaning |
@@ -182,7 +182,7 @@ Dimension: `instance` (plus auto `coreName`/`component`).
 ## State keepalive (`state` class, reserved — automatic)
 
 The library's heartbeat publishes the `state` keepalive on the reserved `state` class
-(`ecv1/{device}/ModbusAdapter/main/state`) every ~5 s — the component never addresses that topic
+(`ecv1/{device}/modbus-adapter/main/state`) every ~5 s — the component never addresses that topic
 itself. The RUNNING keepalive also carries an **`instances`** array: one entry per configured slave
 (`component.instances[]`), so a fleet consumer sees every slave's up/down state under the one component
 without a separate UNS instance per slave (identity, data, and lifecycle stay under `main`).

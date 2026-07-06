@@ -1,9 +1,9 @@
 # Modbus Adapter — Documentation
 
-`com.mbreissi.modbus.ModbusAdapter` connects to Modbus devices (TCP, serial RTU, or RTU-over-TCP) and
+`com.mbreissi.edgecommons.ModbusAdapter` connects to Modbus devices (TCP, serial RTU, or RTU-over-TCP) and
 bridges their registers onto a message bus: it polls a configured register map and republishes value
 changes as structured messages, and serves on-demand reads, writes, and management queries. Built on
-the `ggcommons` (`greengrass-commons`) library, it runs wherever you deploy it — a Greengrass v2
+the `edgecommons` (`edgecommons`) library, it runs wherever you deploy it — a Greengrass v2
 component, a standalone process, or a Kubernetes pod. It is the **Python reference** southbound
 adapter and the poll-based counterpart to the (Java) OPC UA reference adapter.
 

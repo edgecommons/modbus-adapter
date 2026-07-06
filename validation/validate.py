@@ -6,8 +6,8 @@
      and the resulting evt/write audit event.
   D: control verbs (sb/status, sb/signals).
 
-Telemetry rides ecv1/{device}/ModbusAdapter/{instance}/data/#; commands ride the main-instance inbox
-ecv1/{device}/ModbusAdapter/main/cmd/{verb} (verbs sb/read, sb/write, sb/status, sb/signals), with the
+Telemetry rides ecv1/{device}/modbus-adapter/{instance}/data/#; commands ride the main-instance inbox
+ecv1/{device}/modbus-adapter/main/cmd/{verb} (verbs sb/read, sb/write, sb/status, sb/signals), with the
 target instance carried in the request body. Replies are {"ok":true,"result":...} on the request's
 reply_to.
 """

@@ -1,7 +1,7 @@
 # Sample Configurations
 
 Complete, copy-paste-ready configurations for the Modbus adapter
-(`com.mbreissi.modbus.ModbusAdapter`), built up from a trivial dev loop to a realistic,
+(`com.mbreissi.edgecommons.ModbusAdapter`), built up from a trivial dev loop to a realistic,
 multi-table device map placed in the Unified Namespace, plus how data reaches the cloud —
 with an explanation of **what every option does and how it changes runtime behavior**.
 
@@ -12,7 +12,7 @@ see [how-to-guides.md](how-to-guides.md); for the message envelopes see
 see [explanation.md](explanation.md).
 
 The adapter loads **one JSON document** from `-c/--config`. The top level may contain `component`
-(required — the adapter) and the standard ggcommons sections `tags`, `hierarchy`, `identity`, `topic`,
+(required — the adapter) and the standard edgecommons sections `tags`, `hierarchy`, `identity`, `topic`,
 `messaging`, `metricEmission`, `logging`, `heartbeat`, and (opt-in) `streaming`. Timing values resolve
 **signal/group ▸ instance `defaults` ▸ `global.defaults` ▸ built-in**.
 
@@ -87,7 +87,7 @@ You can drop the `messaging` section entirely and pass the broker inline instead
 
 | Option | Effect |
 |--------|--------|
-| `logging.level` | Standard ggcommons log level. `INFO` logs connect/poll-group summaries and errors; `DEBUG` adds per-call detail. |
+| `logging.level` | Standard edgecommons log level. `INFO` logs connect/poll-group summaries and errors; `DEBUG` adds per-call detail. |
 | `messaging.local.type/host/port` | The transport target for published `SouthboundSignalUpdate` messages. On `HOST` this is the local MQTT broker the adapter connects to (and the same broker your consumers subscribe on). |
 | `messaging.local.clientId` | MQTT client id used for the broker session. Make it unique per process so two adapters don't fight over the same session. |
 | `instances[].id` | Stable instance id. The `{instance}` token of the `data`/`evt` topics, `device.instance` in every message, and the `[plc1]` prefix in logs. |
@@ -303,30 +303,30 @@ requests/second** across both unit ids on the one socket.
 ### UNS data-plane topics
 
 Every `SouthboundSignalUpdate` publishes on the UNS `data` class,
-`ecv1/{device}/ModbusAdapter/{instance}/data/{signal}`, minted and validated by the library — the
+`ecv1/{device}/modbus-adapter/{instance}/data/{signal}`, minted and validated by the library — the
 `{signal}` channel is the signal `name` passed through the UNS token sanitizer (`/ + # \`, control
 chars → `_`). With thing name `gw-01`, `hierarchy.levels = [site, area, line, device]`, and instance
 `skid1`:
 
 | Signal (register) | Resolved topic |
 |----------------|----------------|
-| `Temperature` (holding 0, u1) | `ecv1/gw-01/ModbusAdapter/skid1/data/Temperature` |
-| `EnergyImport` (input 0, u2) | `ecv1/gw-01/ModbusAdapter/skid1/data/EnergyImport` |
-| `RunCmd` (coil 0, u1) | `ecv1/gw-01/ModbusAdapter/skid1/data/RunCmd` |
-| `AlarmHigh` (holding 16 bit 0, u1) | `ecv1/gw-01/ModbusAdapter/skid1/data/AlarmHigh` |
+| `Temperature` (holding 0, u1) | `ecv1/gw-01/modbus-adapter/skid1/data/Temperature` |
+| `EnergyImport` (input 0, u2) | `ecv1/gw-01/modbus-adapter/skid1/data/EnergyImport` |
+| `RunCmd` (coil 0, u1) | `ecv1/gw-01/modbus-adapter/skid1/data/RunCmd` |
+| `AlarmHigh` (holding 16 bit 0, u1) | `ecv1/gw-01/modbus-adapter/skid1/data/AlarmHigh` |
 
 The enterprise location rides the top-level `identity` element, not the topic:
 `identity.path = "plant1/pumphouse/5/gw-01"`. A fleet consumer subscribes one wildcard
 `ecv1/+/+/+/data/#` rather than per-signal templates.
 
 **Worked example — `AlarmHigh`.** It reads bit 0 of `StatusWord` on `unitId 1`; its topic is
-`ecv1/gw-01/ModbusAdapter/skid1/data/AlarmHigh`, and the message carries the stamped identity plus the
+`ecv1/gw-01/modbus-adapter/skid1/data/AlarmHigh`, and the message carries the stamped identity plus the
 canonical signal identity in the body:
 
 ```jsonc
 "identity": { "hier": [ {"level":"site","value":"plant1"}, {"level":"area","value":"pumphouse"},
                         {"level":"line","value":"5"}, {"level":"device","value":"gw-01"} ],
-              "path": "plant1/pumphouse/5/gw-01", "component": "ModbusAdapter", "instance": "skid1" },
+              "path": "plant1/pumphouse/5/gw-01", "component": "modbus-adapter", "instance": "skid1" },
 "body": {
   "device": { "adapter": "modbus", "instance": "skid1", "endpoint": "tcp://10.0.0.50:502 unit=1" },
   "signal": {
@@ -393,7 +393,7 @@ local MQTT broker on `HOST`/`KUBERNETES`. That is the adapter's data plane: `Sig
 every `SouthboundSignalUpdate` on the UNS `data` class through the instance's `data()` facade (which
 constructs the body and mints the topic), and
 the read/write/control surface is served by the library **command inbox**
-(`ecv1/{device}/ModbusAdapter/main/cmd/#`) — both on the default provider channel (the local broker on
+(`ecv1/{device}/modbus-adapter/main/cmd/#`) — both on the default provider channel (the local broker on
 HOST, IPC on Greengrass). On-box consumers read those topics.
 
 **What the adapter sends to the cloud itself.** The one northbound path the adapter wires directly is
@@ -447,7 +447,7 @@ choice, handled by a separate consumer of the local topics:
 - **High-rate, high-volume** process data for analytics or a historian — the library's streaming
   subsystem, `gg.streams()`, which batches and compresses into a durable on-disk buffer that drains to
   Kinesis or Kafka and survives WAN outages. See the [Streaming guide](/guides/streaming/) and the
-  [streaming reference](/reference/streaming/) for its configuration; it is a `ggcommons` subsystem you
+  [streaming reference](/reference/streaming/) for its configuration; it is a `edgecommons` subsystem you
   run in a forwarding component, not a `modbus-adapter` option.
 
 ---
@@ -555,7 +555,7 @@ ComponentConfiguration:
 | Option | Effect |
 |--------|--------|
 | `--platform GREENGRASS` (in the recipe `Run`) | Selects IPC messaging and `GG_CONFIG` as the config source; publishes route through the Nucleus rather than a broker. The recipe's `accessControl` grants pub/sub on IPC and IoT Core. |
-| `heartbeat.*` | Standard ggcommons heartbeat — the UNS `state` keepalive (`ecv1/{device}/ModbusAdapter/main/state`) plus CPU/memory/disk `sys` measures. Independent of Modbus polling; `destination` (default `local`) is the local channel on GG IPC. |
+| `heartbeat.*` | Standard edgecommons heartbeat — the UNS `state` keepalive (`ecv1/{device}/modbus-adapter/main/state`) plus CPU/memory/disk `sys` measures. Independent of Modbus polling; `destination` (default `local`) is the local channel on GG IPC. |
 | `metricEmission.target: log` | Routes the `southbound_health` metric to a rotating log file (vs `messaging`/`cloudwatch`/`prometheus`). `{ComponentFullName}` resolves to the deployed component name. |
 | signal `scale` | `Scaled` publishes `raw × 0.1` (raw `123` → `12.3`); a scaled integer is emitted as a float. |
 
@@ -567,7 +567,7 @@ becomes ready once connected.
 
 ## 6. Kubernetes (ConfigMap)
 
-On Kubernetes the config is mounted as a **directory** (the whole ConfigMap volume) at `/etc/ggcommons`;
+On Kubernetes the config is mounted as a **directory** (the whole ConfigMap volume) at `/etc/edgecommons`;
 the `CONFIGMAP` source watches the kubelet `..data` symlink swap and **hot-reloads in process** on
 `kubectl apply`. With `--platform auto`, the library detects KUBERNETES from the ServiceAccount token,
 picks the `CONFIGMAP` source and `MQTT` transport (broker from the config), and takes identity from the
@@ -616,7 +616,7 @@ data:
 | Config source `CONFIGMAP` | Reads `config.json` from the mounted ConfigMap directory and hot-reloads when you `kubectl apply` a new ConfigMap (the `..data` swap) — no pod restart. |
 | `messaging.local.host` | Point at an **in-cluster** broker Service DNS name (`emqx.default.svc.cluster.local`). |
 | `connection.host` | Point at the device/gateway's **Service** or reachable address — the adapter runs in-cluster, so the device must be reachable from the pod network. |
-| Identity (no `-t`) | The Thing name resolves from the Downward API (`GGCOMMONS_THING_NAME` ▸ `POD_NAME`), so the `{device}` token of every UNS topic is the pod name unless overridden. |
+| Identity (no `-t`) | The Thing name resolves from the Downward API (`EDGECOMMONS_THING_NAME` ▸ `POD_NAME`), so the `{device}` token of every UNS topic is the pod name unless overridden. |
 | `metricEmission.target: prometheus` | Exposes the `southbound_health` metric as OpenMetrics text at `:9090/metrics` for scraping (the default metric target on KUBERNETES). |
 | Health/probes | The Deployment exposes the library's HTTP health endpoint (`/startupz`, `/livez`, `/readyz`) for k8s probes. |
 
@@ -663,7 +663,7 @@ window into fewer messages.
 
 ### UNS addressing, sanitization, and precedence
 
-A data topic is `ecv1/{device}/ModbusAdapter/{instance}/data/{signal}`, minted and validated by the
+A data topic is `ecv1/{device}/modbus-adapter/{instance}/data/{signal}`, minted and validated by the
 library's UNS builder — `{device}` is the resolved thing name (last `hierarchy` level), `{instance}`
 the device instance id, and `{signal}` the signal `name` passed through the UNS token sanitizer (`/`,
 `+`, `#`, `\`, control chars → `_`; `..` rejected) so a channel token can never inject a level or a
@@ -691,7 +691,7 @@ driven by the same live poll reads (not a cached client flag), so a mid-session 
 ### Reads vs writes (the command surface)
 
 Polling is the read **plane**. The command surface is separate — served by the library command inbox
-(`ecv1/{device}/ModbusAdapter/main/cmd/{verb}`), with the target device selected by an `instance` field
+(`ecv1/{device}/modbus-adapter/main/cmd/{verb}`), with the target device selected by an `instance` field
 in the request body. Every reply is `{ "ok": true, "result": … }` or `{ "ok": false, "error": … }`.
 
 - **Writes** (`sb/write`) require `write.enabled: true` (otherwise a `WRITE_DISABLED` error).

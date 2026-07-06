@@ -1,5 +1,5 @@
-# ggcommons UNS core, pinned to the released tag @python-lib/v0.2.0 (the UNS core, merged to main).
+# edgecommons UNS core, pinned to the released tag @python-lib/v0.2.0 (the UNS core, merged to main).
 # Never bump this pin alone; it moves together with a UNS-aware component. For local dev,
-# `pip install -e ../ggcommons/libs/python` already satisfies this.
-greengrass-commons @ git+https://github.com/edgecommons/ggcommons.git@python-lib/v0.2.0#subdirectory=libs/python
+# `pip install -e ../core/libs/python` already satisfies this.
+edgecommons @ git+https://github.com/edgecommons/edgecommons.git@python-lib/v0.2.0#subdirectory=libs/python
 pymodbus>=3.6

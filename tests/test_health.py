@@ -1,7 +1,7 @@
 """Unit tests for the southbound_health metric wiring (HealthMetrics) using a fake metric emitter.
 
 Since the UNS change, the ``messaging`` metric target auto-routes ``southbound_health`` onto the
-reserved ``metric`` class (ecv1/{device}/ModbusAdapter/main/metric/southbound_health) inside the
+reserved ``metric`` class (ecv1/{device}/modbus-adapter/main/metric/southbound_health) inside the
 metric subsystem — the component still just defines the metric and emits measures, so this wiring is
 unchanged and stays a body ``instance`` dimension."""
 from modbus_adapter.health import HealthMetrics
@@ -28,7 +28,7 @@ class FakeCM:
         return "thing1"
 
     def get_component_name(self):
-        return "ModbusAdapter"
+        return "modbus-adapter"
 
 
 def test_defines_metric_and_emits_measures():

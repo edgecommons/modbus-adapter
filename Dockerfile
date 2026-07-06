@@ -1,6 +1,6 @@
 # Container image for the Modbus adapter on Kubernetes.
 #
-# The ggcommons Python library is resolved from requirements.txt (`greengrass-commons`, from a
+# The edgecommons Python library is resolved from requirements.txt (`edgecommons`, from a
 # registry/PyPI or a pip git+https dep). Build from this directory, load/push, then set `image:`
 # in k8s/deployment.yaml:
 #   docker build -t ghcr.io/<owner>/modbus-adapter:latest .
@@ -12,7 +12,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Dependencies first (layer caching). requirements.txt lists greengrass-commons + pymodbus.
+# Dependencies first (layer caching). requirements.txt lists edgecommons + pymodbus.
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
@@ -24,4 +24,4 @@ USER 65532:65532
 
 ENTRYPOINT ["python3", "/app/main.py"]
 # No default args: with --platform auto the library detects KUBERNETES from the SA token
-# (config source -> CONFIGMAP at /etc/ggcommons, transport -> MQTT, identity -> Downward API).
+# (config source -> CONFIGMAP at /etc/edgecommons, transport -> MQTT, identity -> Downward API).

@@ -3,14 +3,14 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "gg-modbus-adapter"
+name = "edgecommons-modbus-adapter"
 version = "1.0.0"
-description = "GGCommons Modbus southbound adapter — the Python reference protocol adapter"
+description = "EdgeCommons Modbus southbound adapter — the Python reference protocol adapter"
 requires-python = ">=3.9"
 dependencies = [
     # Pinned to the released tag @python-lib/v0.2.0 (the UNS core, merged to main) — see requirements.txt.
-    # Local dev uses the sibling working tree via `pip install -e ../ggcommons/libs/python`.
-    "greengrass-commons @ git+https://github.com/edgecommons/ggcommons.git@python-lib/v0.2.0#subdirectory=libs/python",
+    # Local dev uses the sibling working tree via `pip install -e ../core/libs/python`.
+    "edgecommons @ git+https://github.com/edgecommons/edgecommons.git@python-lib/v0.2.0#subdirectory=libs/python",
     "pymodbus>=3.6",
 ]
 

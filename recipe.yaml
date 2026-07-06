@@ -1,6 +1,6 @@
 ---
 RecipeFormatVersion: "2020-01-25"
-ComponentName: "com.mbreissi.modbus.ModbusAdapter"
+ComponentName: "com.mbreissi.edgecommons.ModbusAdapter"
 ComponentVersion: "1.0.0"
 ComponentDescription: "Modbus -> Greengrass southbound adapter (pymodbus); the Python reference adapter"
 ComponentPublisher: "Marc Breissinger"
@@ -14,7 +14,7 @@ ComponentConfiguration:
       logging:
         level: "INFO"
         python_format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-      # UNS state keepalive (ecv1/{device}/ModbusAdapter/main/state) + system 'sys' measures.
+      # UNS state keepalive (ecv1/{device}/modbus-adapter/main/state) + system 'sys' measures.
       heartbeat:
         intervalSecs: 5
         measures:
@@ -23,7 +23,7 @@ ComponentConfiguration:
           disk: false
       tags: {}
       # Optional UNS enterprise-hierarchy placement. Absent => the zero-config default ["device"] and
-      # topics are ecv1/{thing}/ModbusAdapter/{instance}/.... Supply the non-device level values in
+      # topics are ecv1/{thing}/modbus-adapter/{instance}/.... Supply the non-device level values in
       # `identity`; the last level (device) is always the resolved thing name and must NOT be set.
       # hierarchy:
       #   levels: ["site", "area", "line", "device"]
@@ -43,7 +43,7 @@ ComponentConfiguration:
           - id: "plc1"
             adapter: "modbus"
             connection: { transport: "tcp", host: "127.0.0.1", port: 5020, unitId: 1, timeoutMs: 1000 }
-            # Data updates publish on the UNS data class (ecv1/{device}/ModbusAdapter/plc1/data/{signal});
+            # Data updates publish on the UNS data class (ecv1/{device}/modbus-adapter/plc1/data/{signal});
             # on-demand read/write/control ride the command inbox (cmd class). No topic templates.
             publish: { batchMs: 0 }
             write: { enabled: true }
@@ -55,7 +55,7 @@ ComponentConfiguration:
                   - { name: "Scaled", table: "holding", address: 40, type: "uint16", scale: 0.1 }
     accessControl:
       aws.greengrass.ipc.pubsub:
-        "com.mbreissi.modbus.ModbusAdapter:ipc:1":
+        "com.mbreissi.edgecommons.ModbusAdapter:ipc:1":
           policyDescription: Allows access to publish/subscribe to all topics on IPC
           operations:
             - "aws.greengrass#PublishToTopic"
@@ -63,7 +63,7 @@ ComponentConfiguration:
           resources:
             - "*"
       aws.greengrass.ipc.mqttproxy:
-        "com.mbreissi.modbus.ModbusAdapter:iotcore:1":
+        "com.mbreissi.edgecommons.ModbusAdapter:iotcore:1":
           policyDescription: Allows access to publish/subscribe to all topics on IoT Core.
           operations:
             - "aws.greengrass#PublishToIoTCore"
@@ -85,8 +85,8 @@ Manifests:
           python3 -m venv "$COMPONENT_DIR/venv"
           . $COMPONENT_DIR/venv/bin/activate
           pip3 install --upgrade pip
-          # Install the bundled ggcommons wheel first (it is not on public PyPI), then the rest;
-          # greengrass-commons in requirements.txt is then already satisfied and skipped.
+          # Install the bundled edgecommons wheel first (it is not on public PyPI), then the rest;
+          # edgecommons in requirements.txt is then already satisfied and skipped.
           pip3 install {artifacts:decompressedPath}/ModbusAdapter/greengrass_commons-*.whl
           pip3 install -r {artifacts:decompressedPath}/ModbusAdapter/requirements.txt
           deactivate

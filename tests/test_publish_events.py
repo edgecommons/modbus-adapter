@@ -1,8 +1,8 @@
 """Unit tests for the UNS data publisher (through the real ``data()`` facade), the evt emitter
 (through the real ``events()`` facade), the client counters, and the poll manager's on-demand poll
-path -- all with in-memory fakes (a recording messaging client bound to a real ``GgInstance``, so
+path -- all with in-memory fakes (a recording messaging client bound to a real ``EdgeCommonsInstance``, so
 these tests pin the real facade body/topic contract, not a hand-rolled shape)."""
-from ggcommons.facades.quality import Quality
+from edgecommons.facades.quality import Quality
 
 from modbus_adapter.events import EventEmitter
 from modbus_adapter.metrics import ClientMetrics
@@ -26,7 +26,7 @@ def test_publish_mints_uns_data_topic_and_body():
     pub.offer(group, signal, SignalUpdatePublisher.make_sample(1234))
     assert len(msg.published) == 1
     topic, envelope = msg.published[0]
-    assert topic == "ecv1/thing1/ModbusAdapter/plc1/data/Counter16"
+    assert topic == "ecv1/thing1/modbus-adapter/plc1/data/Counter16"
     body = envelope.body
     assert body["device"]["adapter"] == "modbus" and body["device"]["instance"] == "plc1"
     assert body["signal"]["name"] == "Counter16" and body["signal"]["id"] == "u1/holding/0/uint16"
@@ -74,7 +74,7 @@ def test_publish_value_less_bad_read_uses_the_raw_escape_hatch():
     pub.offer(group, signal, SignalUpdatePublisher.make_sample(None, Quality.BAD, "read timeout"))
     assert len(msg.published) == 1
     topic, envelope = msg.published[0]
-    assert topic == "ecv1/thing1/ModbusAdapter/plc1/data/Counter16"
+    assert topic == "ecv1/thing1/modbus-adapter/plc1/data/Counter16"
     sample = envelope.body["samples"][0]
     assert sample["value"] is None
     assert sample["quality"] == "BAD" and sample["qualityRaw"] == "read timeout"
@@ -112,7 +112,7 @@ def test_connection_lost_raises_critical_alarm():
     topic, envelope = msg.published[0]
     # severity DERIVES the channel: evt/{severity}/{type} -- identical in shape to the OPC UA
     # adapter's evt convention (the drift DESIGN-class-facades §1.2 documents is fixed).
-    assert topic == "ecv1/thing1/ModbusAdapter/plc1/evt/critical/connection"
+    assert topic == "ecv1/thing1/modbus-adapter/plc1/evt/critical/connection"
     body = envelope.body
     assert body["severity"] == "critical" and body["type"] == "connection"
     assert body["alarm"] is True and body["active"] is True
@@ -127,7 +127,7 @@ def test_connection_restored_clears_the_same_alarm_channel():
     assert len(msg.published) == 2
     lost_topic, _ = msg.published[0]
     restored_topic, restored_envelope = msg.published[1]
-    assert restored_topic == lost_topic == "ecv1/thing1/ModbusAdapter/plc1/evt/critical/connection"
+    assert restored_topic == lost_topic == "ecv1/thing1/modbus-adapter/plc1/evt/critical/connection"
     assert restored_envelope.body["alarm"] is True and restored_envelope.body["active"] is False
 
 
@@ -135,7 +135,7 @@ def test_write_success_emits_info_severity():
     msg = FakeMessaging()
     EventEmitter(FakeInstance(msg).events()).write(True, "RWInt16", 42)
     topic, envelope = msg.published[0]
-    assert topic == "ecv1/thing1/ModbusAdapter/plc1/evt/info/write"
+    assert topic == "ecv1/thing1/modbus-adapter/plc1/evt/info/write"
     body = envelope.body
     assert body["severity"] == "info" and body["type"] == "write"
     assert body["context"] == {"signal": "RWInt16", "value": 42}
@@ -145,7 +145,7 @@ def test_write_failure_emits_warning_severity():
     msg = FakeMessaging()
     EventEmitter(FakeInstance(msg).events()).write(False, "RWInt16", 42, "timeout")
     topic, envelope = msg.published[0]
-    assert topic == "ecv1/thing1/ModbusAdapter/plc1/evt/warning/write"
+    assert topic == "ecv1/thing1/modbus-adapter/plc1/evt/warning/write"
     body = envelope.body
     assert body["severity"] == "warning"
     assert body["context"]["error"] == "timeout"

@@ -1,5 +1,5 @@
 """Batches/publishes Modbus reads through the instance's ``data()`` facade
-(``docs/platform/DESIGN-class-facades.md`` §2.1, ``ggcommons.facades.data_facade.DataFacade``) --
+(``docs/platform/DESIGN-class-facades.md`` §2.1, ``edgecommons.facades.data_facade.DataFacade``) --
 the facade constructs the ``SouthboundSignalUpdate`` body (``device``/``signal``/``samples``), mints
 the UNS ``data`` topic, stamps the envelope identity, and applies the quality/timestamp defaults, so
 this module never hand-assembles the body or the topic for a normal read.
@@ -7,7 +7,7 @@ this module never hand-assembles the body or the topic for a normal read.
 Modbus has **no native quality notion**: a successful read passes no ``quality`` at all, so the
 facade defaults it to ``GOOD`` with ``qualityRaw: "unspecified"`` -- the DESIGN-class-facades §2.1
 "source with no native quality codes" case. A failed read passes an explicit
-:attr:`~ggcommons.facades.quality.Quality.BAD` with the raw error text as ``qualityRaw`` -- **and no
+:attr:`~edgecommons.facades.quality.Quality.BAD` with the raw error text as ``qualityRaw`` -- **and no
 value at all** (a whole read block failed, so there is nothing to report). The ``data()`` facade's
 ``samples[]`` structurally REQUIRES a value (DESIGN-class-facades §5.2, D2 -- the only hard reject
 besides ``signal.id``), so a value-less sample cannot pass through the normal builder; it uses the
@@ -27,10 +27,10 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from ggcommons.facades.data_facade import DataFacade
-from ggcommons.facades.quality import Quality
-from ggcommons.facades.signal_update import Sample
-from ggcommons.facades.util import format_instant
+from edgecommons.facades.data_facade import DataFacade
+from edgecommons.facades.quality import Quality
+from edgecommons.facades.signal_update import Sample
+from edgecommons.facades.util import format_instant
 
 LOGGER = logging.getLogger("modbus_adapter.publisher")
 
@@ -45,7 +45,7 @@ class SignalUpdatePublisher:
     @staticmethod
     def make_sample(value, quality: Optional[Quality] = None, quality_raw: Optional[str] = None,
                     source_ts: Optional[str] = None) -> Sample:
-        """Builds one :class:`~ggcommons.facades.signal_update.Sample` for a read.
+        """Builds one :class:`~edgecommons.facades.signal_update.Sample` for a read.
         ``quality=None`` (the normal successful-read case) leaves it for the ``data()`` facade to
         default to ``GOOD``/``qualityRaw:"unspecified"`` -- Modbus has no native quality codes. A
         failed read passes ``value=None`` with an explicit :attr:`Quality.BAD` (+ the raw error
@@ -94,7 +94,7 @@ class SignalUpdatePublisher:
     def _publish_valueless(self, group, signal, samples: List[Sample]) -> None:
         """A fully failed block read carries **no value at all** for its signals -- the module
         docstring explains why that can't go through the normal builder. Uses
-        :meth:`~ggcommons.facades.data_facade.DataFacade.publish_body` (the raw escape hatch) to
+        :meth:`~edgecommons.facades.data_facade.DataFacade.publish_body` (the raw escape hatch) to
         publish the historical ``{"value": None, "quality": "BAD", ...}`` shape verbatim; the
         topic is still minted and the identity still stamped by this same instance's ``data()``
         facade -- only the per-sample defaulting is done by hand here (mirroring

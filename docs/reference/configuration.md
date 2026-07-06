@@ -8,7 +8,7 @@ see the [how-to guides](../how-to-guides.md); for the type system, see [data-typ
 The adapter reads one JSON document from `-c/--config`, defaulting by platform: `HOST` → `FILE`,
 `GREENGRASS` → `GG_CONFIG`, `KUBERNETES` → `CONFIGMAP`. Adapter settings live under `component`; the
 sibling sections (`tags`, `hierarchy`, `identity`, `topic`, `messaging`, `logging`, `metricEmission`,
-`heartbeat`) are standard ggcommons sections.
+`heartbeat`) are standard edgecommons sections.
 
 ## Top-level sections
 
@@ -21,7 +21,7 @@ sibling sections (`tags`, `hierarchy`, `identity`, `topic`, `messaging`, `loggin
 | `topic` | optional | `includeRoot` (default `false`) — insert the site level after `ecv1` on a multi-site broker. |
 | `messaging` | HOST/KUBERNETES | MQTT broker connection (or `--transport MQTT <file>`). |
 | `metricEmission` | optional | Routes `southbound_health` (`target`: `log`/`messaging`/`cloudwatch`/`prometheus`). `messaging` auto-routes to the UNS `metric` class. |
-| `logging`, `heartbeat` | optional | Standard ggcommons sections. |
+| `logging`, `heartbeat` | optional | Standard edgecommons sections. |
 
 UNS topics are `ecv1/{device}/{component}/{instance}/{class}[/channel]` — built and validated by the
 library from the identity above; there are no per-instance/per-signal topic templates.
@@ -88,7 +88,7 @@ library from the identity above; there are no per-instance/per-signal topic temp
 `hierarchy.levels` names the enterprise tree, deepest (the device) last; `identity` supplies every
 level's value **except** the last (the last is always the resolved thing name). The values become the
 envelope `identity.hier`/`path`. With the default (`["device"]`) topics are
-`ecv1/{thing}/ModbusAdapter/{instance}/...`; `topic.includeRoot: true` (multi-site broker) prepends the
+`ecv1/{thing}/modbus-adapter/{instance}/...`; `topic.includeRoot: true` (multi-site broker) prepends the
 first level (site) after `ecv1`.
 
 ```jsonc

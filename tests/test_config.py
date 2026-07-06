@@ -11,7 +11,7 @@ class FakeCM:
     """Minimal ConfigManager stand-in: ServerConfiguration only needs per-instance config now that
     topic construction moved to the UNS builder."""
 
-    def __init__(self, instances, component="ModbusAdapter"):
+    def __init__(self, instances, component="modbus-adapter"):
         self._instances = {i["id"]: i for i in instances}
         self._component = component
 
@@ -120,16 +120,16 @@ def test_write_disabled_by_default():
 def test_uns_data_topic_and_identity():
     """Data-plane addressing now comes from the UNS builder (gg.instance(id).uns()), not a config
     template: the channel is the sanitized signal name and the topic is device/component/instance-shaped."""
-    from ggcommons.config.manager.config_manager import ConfigManager
-    from ggcommons.messaging.identity import HierEntry, MessageIdentity
-    from ggcommons.uns import Uns, UnsClass
+    from edgecommons.config.manager.config_manager import ConfigManager
+    from edgecommons.messaging.identity import HierEntry, MessageIdentity
+    from edgecommons.uns import Uns, UnsClass
 
     identity = MessageIdentity(
-        [HierEntry("site", "lab"), HierEntry("device", "thing1")], "ModbusAdapter"
+        [HierEntry("site", "lab"), HierEntry("device", "thing1")], "modbus-adapter"
     ).with_instance("plc1")
     uns = Uns(identity, include_root=False)                       # rootless (default) grammar
     assert uns.topic(UnsClass.DATA, ConfigManager.sanitize("Temp")) == \
-        "ecv1/thing1/ModbusAdapter/plc1/data/Temp"
+        "ecv1/thing1/modbus-adapter/plc1/data/Temp"
     # A signal name carrying reserved topic chars is sanitized to a single valid channel token.
     assert uns.topic(UnsClass.DATA, ConfigManager.sanitize("Line/1#Temp")) == \
-        "ecv1/thing1/ModbusAdapter/plc1/data/Line_1_Temp"
+        "ecv1/thing1/modbus-adapter/plc1/data/Line_1_Temp"

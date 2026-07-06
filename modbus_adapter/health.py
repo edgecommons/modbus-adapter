@@ -1,7 +1,7 @@
 """The standard ``southbound_health`` metric (contract §5), per instance."""
 import logging
 
-from ggcommons.metrics.metric_builder import MetricBuilder
+from edgecommons.metrics.metric_builder import MetricBuilder
 
 LOGGER = logging.getLogger("modbus_adapter.health")
 

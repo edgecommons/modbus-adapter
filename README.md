@@ -1,10 +1,10 @@
-# GGCommons Modbus Adapter
+# EdgeCommons Modbus Adapter
 
-The **Python reference** southbound protocol adapter, built on the `ggcommons`
-(`greengrass-commons`) library and the southbound contract (`docs/SOUTHBOUND.md` in the ggcommons
+The **Python reference** southbound protocol adapter, built on the `edgecommons`
+(`edgecommons`) library and the southbound contract (`docs/SOUTHBOUND.md` in the edgecommons
 monorepo). It bridges **Modbus** devices — TCP, serial RTU, and RTU-over-TCP — onto a message bus:
 it polls register maps and republishes value changes as `SouthboundSignalUpdate` messages on the
-**Unified Namespace** `data` class (`ecv1/{device}/ModbusAdapter/{instance}/data/{signal}`), serves
+**Unified Namespace** `data` class (`ecv1/{device}/modbus-adapter/{instance}/data/{signal}`), serves
 on-demand reads/writes/control through the library **command inbox** (`sb/read`, `sb/write`,
 `sb/status`, `sb/signals`, `reconnect`, `repoll`), emits `evt`-class connection/write events (through
 the library's `data()`/`events()` facades), and reports the `southbound_health` metric. It runs
@@ -28,8 +28,8 @@ python main.py --platform HOST --transport MQTT validation/messaging-local.json 
 ```
 
 Subscribe to `ecv1/+/+/+/data/#` to watch telemetry (and `ecv1/+/+/+/state`, `ecv1/+/+/+/metric/#`
-for the keepalive + health). For local dev against the **sibling** ggcommons UNS library, install it
-editable into the venv first: `pip install -e ../ggcommons/libs/python`, then `pip install -e .
+for the keepalive + health). For local dev against the **sibling** edgecommons UNS library, install it
+editable into the venv first: `pip install -e ../core/libs/python`, then `pip install -e .
 -r requirements-test.txt`.
 
 ## Tests

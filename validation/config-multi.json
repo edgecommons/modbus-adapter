@@ -1,38 +1,113 @@
 {
-  "tags": { "appId": "modbus", "site": "lab", "shop": "s1", "line": "l1" },
-  "hierarchy": { "levels": ["site", "shop", "line", "device"] },
-  "identity": { "site": "lab", "shop": "s1", "line": "l1" },
-  "logging": { "level": "INFO" },
-  "metricEmission": { "target": "messaging" },
+  "tags": {
+    "appId": "modbus",
+    "site": "lab",
+    "shop": "s1",
+    "line": "l1"
+  },
+  "hierarchy": {
+    "levels": [
+      "site",
+      "shop",
+      "line",
+      "device"
+    ]
+  },
+  "identity": {
+    "site": "lab",
+    "shop": "s1",
+    "line": "l1"
+  },
+  "logging": {
+    "level": "INFO"
+  },
+  "metricEmission": {
+    "target": "messaging"
+  },
   "component": {
-    "global": { "defaults": { "pollIntervalMs": 500, "publishMode": "onChange", "batchMs": 0 } },
+    "global": {
+      "defaults": {
+        "pollIntervalMs": 500,
+        "publishMode": "onChange",
+        "batchMs": 0
+      }
+    },
     "instances": [
       {
         "id": "plc1",
-        "connection": { "transport": "tcp", "host": "127.0.0.1", "port": 5020, "unitId": 1, "timeoutMs": 1000 },
-        "publish": { "batchMs": 0 },
-        "write": { "enabled": true },
+        "connection": {
+          "transport": "tcp",
+          "host": "127.0.0.1",
+          "port": 5020,
+          "unitId": 1,
+          "timeoutMs": 1000
+        },
+        "publish": {
+          "batchMs": 0
+        },
+        "write": {
+          "enabled": true
+        },
         "pollGroups": [
-          { "id": "g", "pollIntervalMs": 500,
+          {
+            "id": "g",
+            "pollIntervalMs": 500,
             "signals": [
-              { "name": "Counter16", "table": "holding", "address": 0, "type": "uint16" },
-              { "name": "Scaled", "table": "holding", "address": 40, "type": "uint16", "scale": 0.1 }
-            ] }
+              {
+                "name": "Counter16",
+                "table": "holding",
+                "address": 0,
+                "type": "uint16"
+              },
+              {
+                "name": "Scaled",
+                "table": "holding",
+                "address": 40,
+                "type": "uint16",
+                "scale": 0.1
+              }
+            ]
+          }
         ]
       },
       {
         "id": "plc2",
-        "connection": { "transport": "tcp", "host": "127.0.0.1", "port": 5021, "unitId": 1, "timeoutMs": 1000 },
-        "publish": { "batchMs": 0 },
-        "write": { "enabled": true },
+        "connection": {
+          "transport": "tcp",
+          "host": "127.0.0.1",
+          "port": 5021,
+          "unitId": 1,
+          "timeoutMs": 1000
+        },
+        "publish": {
+          "batchMs": 0
+        },
+        "write": {
+          "enabled": true
+        },
         "pollGroups": [
-          { "id": "g", "pollIntervalMs": 500,
+          {
+            "id": "g",
+            "pollIntervalMs": 500,
             "signals": [
-              { "name": "Counter16", "table": "holding", "address": 0, "type": "uint16" },
-              { "name": "Scaled", "table": "holding", "address": 40, "type": "uint16", "scale": 0.1 }
-            ] }
+              {
+                "name": "Counter16",
+                "table": "holding",
+                "address": 0,
+                "type": "uint16"
+              },
+              {
+                "name": "Scaled",
+                "table": "holding",
+                "address": 40,
+                "type": "uint16",
+                "scale": 0.1
+              }
+            ]
+          }
         ]
       }
-    ]
+    ],
+    "token": "modbus-adapter"
   }
 }
