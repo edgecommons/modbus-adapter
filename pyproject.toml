@@ -10,7 +10,7 @@ requires-python = ">=3.9"
 dependencies = [
     # Pinned to the current rebranded core commit until the next Python library tag is cut.
     # Local dev uses the sibling working tree via `pip install -e ../core/libs/python`.
-    "edgecommons @ git+https://github.com/edgecommons/edgecommons.git@14fcca3b729ed869cc545aae086c88153b621668#subdirectory=libs/python",
+    "edgecommons @ git+https://github.com/edgecommons/edgecommons.git@1c01ace09321d8f0e052e63ffb7c0a11aceafb94#subdirectory=libs/python",
     "pymodbus>=3.6",
 ]
 
