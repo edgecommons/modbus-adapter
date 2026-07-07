@@ -3,12 +3,21 @@
 path -- all with in-memory fakes (a recording messaging client bound to a real ``EdgeCommonsInstance``, so
 these tests pin the real facade body/topic contract, not a hand-rolled shape)."""
 from edgecommons.facades.quality import Quality
+from edgecommons.messaging.identity import HierEntry, MessageIdentity
+from edgecommons.messaging.message import Message
+from edgecommons.messaging.proto import MessageBodyCase
 
 from modbus_adapter.events import EventEmitter
 from modbus_adapter.metrics import ClientMetrics
 from modbus_adapter.poll_manager import PollManager
 from modbus_adapter.publisher import SignalUpdatePublisher
 from tests._fakes import FakeConn, FakeInstance, FakeMessaging, make_config
+
+READ_TS = "2026-07-06T18:00:00Z"
+
+
+def _decode(envelope):
+    return Message.from_bytes(envelope.to_bytes())
 
 
 # --- SignalUpdatePublisher (through data()) -------------------------------------------------
@@ -38,6 +47,9 @@ def test_publish_mints_uns_data_topic_and_body():
     assert body["samples"][0]["qualityRaw"] == "unspecified"
     assert "sourceTs" not in body["samples"][0]     # never synthesized -- omitted, not null
     assert body["samples"][0]["serverTs"]
+    decoded = _decode(envelope)
+    assert decoded.get_body_case() == MessageBodyCase.SOUTHBOUND_SIGNAL_UPDATE
+    assert decoded.body["signal"]["id"] == "u1/holding/0/uint16"
 
 
 def test_publish_batches_until_flush():
@@ -48,6 +60,43 @@ def test_publish_batches_until_flush():
     pub.flush()
     assert len(msg.published) == 1
     assert [s["value"] for s in msg.published[0][1].body["samples"]] == [1, 2]
+
+
+def test_publish_preserves_identity_hierarchy_and_top_level_tags_in_protobuf():
+    config = make_config()
+    msg = FakeMessaging()
+    identity = MessageIdentity(
+        [HierEntry("site", "plant-a"), HierEntry("line", "line-2"), HierEntry("device", "thing1")],
+        "modbus-adapter",
+        "plc1",
+    )
+    tags = {"retention": "short", "priority": 5}
+    pub = SignalUpdatePublisher(FakeInstance(msg, identity=identity, tags=tags).data(), config)
+    group = config.poll_groups[0]
+    signal = group.signals[0]
+
+    pub.offer(group, signal, SignalUpdatePublisher.make_sample(1234, server_ts=READ_TS))
+
+    _, envelope = msg.published[0]
+    assert envelope.identity.path == "plant-a/line-2/thing1"
+    assert envelope.identity.to_dict()["hier"] == [
+        {"level": "site", "value": "plant-a"},
+        {"level": "line", "value": "line-2"},
+        {"level": "device", "value": "thing1"},
+    ]
+    assert envelope.tags.to_dict() == tags
+    assert "tags" not in envelope.body
+    assert "sourceTs" not in envelope.body["samples"][0]
+    assert envelope.body["samples"][0]["serverTs"] == READ_TS
+
+    decoded = _decode(envelope)
+    assert decoded.get_body_case() == MessageBodyCase.SOUTHBOUND_SIGNAL_UPDATE
+    assert decoded.identity.path == "plant-a/line-2/thing1"
+    assert decoded.identity.to_dict()["hier"] == envelope.identity.to_dict()["hier"]
+    assert decoded.tags.to_dict() == tags
+    assert "tags" not in decoded.body
+    assert "sourceTs" not in decoded.body["samples"][0]
+    assert decoded.body["samples"][0]["serverTs"] == READ_TS
 
 
 def test_publish_swallows_broker_error():
@@ -65,11 +114,10 @@ def test_publish_swallows_broker_error():
     pub.offer(g, g.signals[0], SignalUpdatePublisher.make_sample(1))   # must not raise
 
 
-def test_publish_value_less_bad_read_uses_the_raw_escape_hatch():
-    # A fully failed block read has no value at all -- the data() facade's samples[]
-    # structurally requires one (DESIGN-class-facades §5.2, D2), so this goes through the raw
-    # escape hatch (publish_body, D5) instead of the normal builder; the topic/identity are
-    # still minted by the same instance's data() facade.
+def test_publish_value_less_bad_read_still_encodes_as_signal_update():
+    # A fully failed block read has no value at all. The fluent builder still rejects that,
+    # so the publisher uses the core facade's pre-built-body path; the message must still
+    # serialize as the typed SouthboundSignalUpdate protobuf body.
     pub, msg, group, signal = _pub()
     pub.offer(group, signal, SignalUpdatePublisher.make_sample(None, Quality.BAD, "read timeout"))
     assert len(msg.published) == 1
@@ -78,8 +126,15 @@ def test_publish_value_less_bad_read_uses_the_raw_escape_hatch():
     sample = envelope.body["samples"][0]
     assert sample["value"] is None
     assert sample["quality"] == "BAD" and sample["qualityRaw"] == "read timeout"
-    assert sample["sourceTs"] is None
+    assert "sourceTs" not in sample
     assert sample["serverTs"]
+    decoded = _decode(envelope)
+    assert decoded.get_body_case() == MessageBodyCase.SOUTHBOUND_SIGNAL_UPDATE
+    decoded_sample = decoded.body["samples"][0]
+    assert decoded_sample["value"] is None
+    assert decoded_sample["quality"] == "BAD"
+    assert "sourceTs" not in decoded_sample
+    assert decoded_sample["serverTs"]
 
 
 def test_publish_value_less_sample_with_no_explicit_quality_still_defaults_to_good():
@@ -177,7 +232,8 @@ def test_client_metrics_counters():
 
 
 # --- PollManager on-demand path -------------------------------------------------------------
-def test_poll_once_reads_and_publishes():
+def test_poll_once_reads_and_publishes(monkeypatch):
+    monkeypatch.setattr("modbus_adapter.poll_manager._read_timestamp", lambda: READ_TS)
     config = make_config(signals=[
         {"name": "Counter16", "table": "holding", "address": 0, "type": "uint16"},
         {"name": "Next", "table": "holding", "address": 1, "type": "uint16"},
@@ -194,6 +250,14 @@ def test_poll_once_reads_and_publishes():
     assert polled == 1
     published_names = {t.rsplit("/", 1)[1] for t, _ in msg.published}
     assert {"Counter16", "Next"} <= published_names
+    for _, envelope in msg.published:
+        sample = envelope.body["samples"][0]
+        assert "sourceTs" not in sample
+        assert sample["serverTs"] == READ_TS
+        decoded = _decode(envelope)
+        decoded_sample = decoded.body["samples"][0]
+        assert "sourceTs" not in decoded_sample
+        assert decoded_sample["serverTs"] == READ_TS
 
 
 def test_resolved_signals_shape():

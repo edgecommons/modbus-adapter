@@ -10,17 +10,15 @@ facade defaults it to ``GOOD`` with ``qualityRaw: "unspecified"`` -- the DESIGN-
 :attr:`~edgecommons.facades.quality.Quality.BAD` with the raw error text as ``qualityRaw`` -- **and no
 value at all** (a whole read block failed, so there is nothing to report). The ``data()`` facade's
 ``samples[]`` structurally REQUIRES a value (DESIGN-class-facades §5.2, D2 -- the only hard reject
-besides ``signal.id``), so a value-less sample cannot pass through the normal builder; it uses the
-facade's raw escape hatch (``publish_body``, D5) instead (see :meth:`SignalUpdatePublisher._publish`).
-Java's OPC UA adapter doesn't hit this: it encodes a missing OPC UA value as Gson's ``JsonNull`` --
-a sentinel object distinct from "no value" -- but Python's plain ``None`` can't make that
-distinction, so the escape hatch is the correct Python mirror of the same "no value" case, not a
-regression to hand-rolled publishing (the topic is still minted, and the envelope identity still
-stamped, by this same instance's ``data()`` facade).
+besides ``signal.id``), so a value-less sample cannot pass through the normal builder. It uses the
+facade's pre-built-body path (``publish_body``, D5) instead (see
+:meth:`SignalUpdatePublisher._publish`), which still mints the topic, stamps the envelope identity
+and tags, and serializes as the typed ``SouthboundSignalUpdate`` protobuf body.
 
 With ``batchMs > 0``, samples are buffered per signal and flushed together by :meth:`flush` (driven by
-the device timer); otherwise each sample publishes immediately. Modbus has no device-side timestamp,
-so ``sourceTs`` stays ``None`` and ``serverTs`` is filled by the facade (the adapter's read time).
+the device timer); otherwise each sample publishes immediately. Modbus has no device-origin timestamp,
+so ``sourceTs`` is not synthesized. Successful Modbus polls stamp ``serverTs`` with the register-read
+completion time; if a caller omits it, the facade still defaults ``serverTs`` to the publish time.
 """
 import logging
 import threading
@@ -44,14 +42,14 @@ class SignalUpdatePublisher:
 
     @staticmethod
     def make_sample(value, quality: Optional[Quality] = None, quality_raw: Optional[str] = None,
-                    source_ts: Optional[str] = None) -> Sample:
+                    source_ts: Optional[str] = None, server_ts: Optional[str] = None) -> Sample:
         """Builds one :class:`~edgecommons.facades.signal_update.Sample` for a read.
         ``quality=None`` (the normal successful-read case) leaves it for the ``data()`` facade to
         default to ``GOOD``/``qualityRaw:"unspecified"`` -- Modbus has no native quality codes. A
         failed read passes ``value=None`` with an explicit :attr:`Quality.BAD` (+ the raw error
         text as ``quality_raw``) -- see the module docstring for how a value-less sample is
         published."""
-        return Sample(value, quality, quality_raw, source_ts, None)
+        return Sample(value, quality, quality_raw, source_ts, server_ts)
 
     def offer(self, group, signal, sample: Sample) -> None:
         if self._config.batch_ms > 0:
@@ -94,11 +92,9 @@ class SignalUpdatePublisher:
     def _publish_valueless(self, group, signal, samples: List[Sample]) -> None:
         """A fully failed block read carries **no value at all** for its signals -- the module
         docstring explains why that can't go through the normal builder. Uses
-        :meth:`~edgecommons.facades.data_facade.DataFacade.publish_body` (the raw escape hatch) to
-        publish the historical ``{"value": None, "quality": "BAD", ...}`` shape verbatim; the
-        topic is still minted and the identity still stamped by this same instance's ``data()``
-        facade -- only the per-sample defaulting is done by hand here (mirroring
-        :meth:`DataFacade.build_body`'s own rules, in case a future caller omits quality)."""
+        :meth:`~edgecommons.facades.data_facade.DataFacade.publish_body` to publish the same
+        ``SouthboundSignalUpdate`` body shape with a protobuf null sample value; the topic,
+        identity, and tags are still minted by this same instance's ``data()`` facade."""
         body = {
             "device": {"adapter": "modbus", "instance": self._config.id,
                        "endpoint": self._config.connection.describe()},
@@ -115,11 +111,13 @@ class SignalUpdatePublisher:
         quality_raw = sample.quality_raw
         if quality_raw is None and quality_defaulted:
             quality_raw = DataFacade.QUALITY_UNSPECIFIED
-        return {
+        out = {
             "value": sample.value,
             "quality": quality,
             "qualityRaw": quality_raw,
-            "sourceTs": sample.source_ts,
             "serverTs": sample.server_ts if sample.server_ts is not None
             else format_instant(datetime.now(timezone.utc)),
         }
+        if sample.source_ts is not None:
+            out["sourceTs"] = sample.source_ts
+        return out

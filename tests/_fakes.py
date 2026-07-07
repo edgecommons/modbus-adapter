@@ -62,19 +62,28 @@ class FakeMessaging:
         self.published.append((topic, msg))
 
 
+class _FakeTagConfig:
+    def __init__(self, tags):
+        self._tags = dict(tags)
+
+    def to_dict(self):
+        return dict(self._tags)
+
+
 class _FakeConfigManager:
     """Minimal ``ConfigManager`` double: just enough for ``MessageBuilder``/``DataFacade``/
     ``EventsFacade`` (component identity, tag config, and the ``publish.channel`` lookups, which
     default to "nothing configured" -> LOCAL)."""
 
-    def __init__(self, identity=IDENTITY):
+    def __init__(self, identity=IDENTITY, tags=None):
         self._identity = identity
+        self._tag_config = _FakeTagConfig(tags) if tags is not None else None
 
     def get_component_identity(self):
         return self._identity
 
     def get_tag_config(self):
-        return None
+        return self._tag_config
 
     def get_instance_config(self, instance_id):
         return {}
@@ -83,14 +92,16 @@ class _FakeConfigManager:
         return {}
 
 
-def FakeInstance(messaging=None, instance_id="plc1"):
+def FakeInstance(messaging=None, instance_id="plc1", identity=IDENTITY, tags=None):
     """A real :class:`~edgecommons.edgecommons_instance.EdgeCommonsInstance` bound to a fake identity/messaging --
     exercises the real ``data()``/``events()`` facades (DESIGN-class-facades) so the publisher/
     events tests pin the real body/topic contract instead of a hand-rolled fake. Drop-in
     replacement for the pre-migration ``FakeInstance`` (same default topic shape:
     ``ecv1/thing1/modbus-adapter/plc1/...``)."""
     messaging = messaging if messaging is not None else FakeMessaging()
-    return EdgeCommonsInstance(instance_id, _FakeConfigManager(), False, messaging_client=messaging)
+    return EdgeCommonsInstance(
+        instance_id, _FakeConfigManager(identity=identity, tags=tags), False, messaging_client=messaging
+    )
 
 
 class FakeEvents:

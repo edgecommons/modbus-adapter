@@ -8,8 +8,10 @@ import logging
 import threading
 import time
 from collections import defaultdict
+from datetime import datetime, timezone
 
 from edgecommons.facades.quality import Quality
+from edgecommons.facades.util import format_instant
 
 from . import codec
 from .config.poll_group import ALWAYS
@@ -18,6 +20,10 @@ LOGGER = logging.getLogger("modbus_adapter.poll")
 
 # Per-request protocol limits.
 MAX_READ = {codec.HOLDING: 125, codec.INPUT: 125, codec.COIL: 2000, codec.DISCRETE: 2000}
+
+
+def _read_timestamp() -> str:
+    return format_instant(datetime.now(timezone.utc))
 
 
 def coalesce(signals, max_gap):
@@ -83,6 +89,7 @@ class PollManager:
         for block in self._blocks[group.id]:
             try:
                 data = self._conn.read(block["table"], block["start"], block["length"], group.unit_id)
+                read_ts = _read_timestamp()
             except Exception as e:  # noqa: BLE001 - block read failed -> BAD for its signals
                 raw = str(e) or "read error"
                 for signal in block["signals"]:
@@ -98,13 +105,15 @@ class PollManager:
                                          count=signal.count, bit=signal.bit)
                 except Exception as e:  # noqa: BLE001
                     self._counters.increment_read_error()
-                    self._publisher.offer(group, signal, self._publisher.make_sample(None, Quality.BAD, str(e)))
+                    self._publisher.offer(
+                        group, signal, self._publisher.make_sample(None, Quality.BAD, str(e), server_ts=read_ts)
+                    )
                     continue
                 self._counters.increment_read()
                 key = (group.unit_id, signal.name)
                 if group.publish_mode == ALWAYS or signal.deadband.exceeds(self._last.get(key), value):
                     self._last[key] = value
-                    self._publisher.offer(group, signal, self._publisher.make_sample(value))
+                    self._publisher.offer(group, signal, self._publisher.make_sample(value, server_ts=read_ts))
 
     def poll_once(self):
         """Force one synchronous poll of every group now (the ``repoll`` command's action). Reuses
