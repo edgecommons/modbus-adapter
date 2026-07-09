@@ -20,6 +20,7 @@ adapter and the poll-based counterpart to the (Java) OPC UA reference adapter.
 - **"What config option does X?"** → [Reference — Configuration](reference/configuration.md).
 - **"How is a register turned into a value?"** → [Reference — Data Types](reference/data-types.md).
 - **"What message on which topic?"** → [Reference — Messaging Interface](reference/messaging-interface.md).
+- **"What does this metric mean?"** → [Reference — Metrics](reference/metrics.md).
 - **"Why poll instead of subscribe?"** → [Explanation](explanation.md).
 
 ## Audience
