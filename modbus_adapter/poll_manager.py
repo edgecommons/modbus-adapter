@@ -15,6 +15,7 @@ from edgecommons.facades.util import format_instant
 
 from . import codec
 from .config.poll_group import ALWAYS
+from .metrics import RESULT_ERROR, RESULT_SUCCESS
 
 LOGGER = logging.getLogger("modbus_adapter.poll")
 
@@ -53,11 +54,12 @@ def coalesce(signals, max_gap):
 
 
 class PollManager:
-    def __init__(self, connection, config, publisher, counters):
+    def __init__(self, connection, config, publisher, counters, operational_metrics=None):
         self._conn = connection
         self._config = config
         self._publisher = publisher
         self._counters = counters
+        self._operational_metrics = operational_metrics
         self._stop = threading.Event()
         self._threads = []
         self._blocks = {}                 # group.id -> coalesced blocks
@@ -80,40 +82,80 @@ class PollManager:
         while not self._stop.is_set():
             t0 = time.monotonic()
             try:
-                self._poll_group(group)
+                table_results = self._poll_group(group)
             except Exception as e:  # noqa: BLE001 - keep the loop alive
                 LOGGER.error("[%s] poll group '%s' failed: %s", self._config.id, group.id, e)
-            self._stop.wait(max(0.0, interval - (time.monotonic() - t0)))
+                table_results = {b["table"]: RESULT_ERROR for b in self._blocks.get(group.id, [])}
+            elapsed = time.monotonic() - t0
+            if elapsed > interval and self._operational_metrics is not None:
+                for table in {b["table"] for b in self._blocks.get(group.id, [])}:
+                    result = table_results.get(table, RESULT_ERROR)
+                    self._operational_metrics.record_poll_overrun(group.id, table, result)
+            self._stop.wait(max(0.0, interval - elapsed))
 
     def _poll_group(self, group):
+        stats = defaultdict(lambda: {
+            "result": RESULT_SUCCESS,
+            "pollDurationMs": 0.0,
+            "protocolReadRequests": 0,
+            "protocolReadErrors": 0,
+            "registersRead": 0,
+            "signalsDecoded": 0,
+            "samplesGood": 0,
+            "samplesBad": 0,
+            "samplesChanged": 0,
+            "samplesSuppressed": 0,
+        })
         for block in self._blocks[group.id]:
+            table = block["table"]
+            block_t0 = time.monotonic()
             try:
-                data = self._conn.read(block["table"], block["start"], block["length"], group.unit_id)
+                stats[table]["protocolReadRequests"] += 1
+                data = self._conn.read(table, block["start"], block["length"], group.unit_id)
                 read_ts = _read_timestamp()
+                stats[table]["registersRead"] += block["length"]
             except Exception as e:  # noqa: BLE001 - block read failed -> BAD for its signals
+                stats[table]["result"] = RESULT_ERROR
+                stats[table]["protocolReadErrors"] += 1
+                stats[table]["samplesBad"] += len(block["signals"])
                 raw = str(e) or "read error"
                 for signal in block["signals"]:
                     self._counters.increment_read_error()
                     self._publisher.offer(group, signal, self._publisher.make_sample(None, Quality.BAD, raw))
+                stats[table]["pollDurationMs"] += (time.monotonic() - block_t0) * 1000.0
                 continue
             for signal in block["signals"]:
                 off = signal.address - block["start"]
                 slice_ = data[off: off + signal.unit_length()]
                 try:
-                    value = codec.decode(signal.table, slice_, type_=signal.type, word_order=signal.word_order,
+                    value = codec.decode(table, slice_, type_=signal.type, word_order=signal.word_order,
                                          byte_order=signal.byte_order, scale=signal.scale, offset=signal.offset,
                                          count=signal.count, bit=signal.bit)
                 except Exception as e:  # noqa: BLE001
+                    stats[table]["result"] = RESULT_ERROR
+                    stats[table]["samplesBad"] += 1
                     self._counters.increment_read_error()
                     self._publisher.offer(
                         group, signal, self._publisher.make_sample(None, Quality.BAD, str(e), server_ts=read_ts)
                     )
                     continue
+                stats[table]["signalsDecoded"] += 1
+                stats[table]["samplesGood"] += 1
                 self._counters.increment_read()
                 key = (group.unit_id, signal.name)
                 if group.publish_mode == ALWAYS or signal.deadband.exceeds(self._last.get(key), value):
                     self._last[key] = value
+                    stats[table]["samplesChanged"] += 1
                     self._publisher.offer(group, signal, self._publisher.make_sample(value, server_ts=read_ts))
+                else:
+                    stats[table]["samplesSuppressed"] += 1
+            stats[table]["pollDurationMs"] += (time.monotonic() - block_t0) * 1000.0
+        table_results = {table: values["result"] for table, values in stats.items()}
+        if self._operational_metrics is not None:
+            for table, values in stats.items():
+                result = values.pop("result")
+                self._operational_metrics.record_poll(group.id, table, result, **values)
+        return table_results
 
     def poll_once(self):
         """Force one synchronous poll of every group now (the ``repoll`` command's action). Reuses

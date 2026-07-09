@@ -15,7 +15,7 @@ from .command_service import CommandService
 from .connection import ModbusConnection
 from .events import EventEmitter
 from .health import HealthMetrics
-from .metrics import ClientMetrics
+from .metrics import ClientMetrics, ModbusOperationalMetrics
 from .poll_manager import PollManager
 from .publisher import SignalUpdatePublisher
 
@@ -36,21 +36,25 @@ class ModbusDevice:
 
         self._counters = ClientMetrics()
         self._health = HealthMetrics(metrics, config_manager, config.id, self._counters)
+        self._operational_metrics = ModbusOperationalMetrics(metrics, config_manager, config)
 
-        self._connection = ModbusConnection(config)
+        self._connection = ModbusConnection(config, self._operational_metrics)
         self._connection.connect()                      # blocks/retries until connected
         self._connected = True
         self._health.emit(True)
+        self._operational_metrics.emit(True)
         self._events.connection(True, {"endpoint": config.connection.describe()})
 
-        self._publisher = SignalUpdatePublisher(self._instance.data(), config)
-        self._poller = PollManager(self._connection, config, self._publisher, self._counters)
+        self._publisher = SignalUpdatePublisher(self._instance.data(), config, self._operational_metrics)
+        self._poller = PollManager(
+            self._connection, config, self._publisher, self._counters, self._operational_metrics
+        )
         self._poller.start()
 
         # The command surface (read/write/status/signals/reconnect/repoll). No subscription here —
         # main.py registers the verbs on gg.get_commands() and dispatches into this object.
         self.commands = CommandService(self._connection, self._events, config,
-                                       self._counters, self._poller)
+                                       self._counters, self._poller, self._operational_metrics)
 
         self._stop = threading.Event()
         tick = (config.batch_ms / 1000.0) if config.batch_ms > 0 else 5.0
@@ -64,6 +68,7 @@ class ModbusDevice:
             self._publisher.flush()
             connected = self._connection.is_connected()
             self._health.emit(connected)
+            self._operational_metrics.emit(connected)
             if connected != self._connected:
                 self._connected = connected
                 self._events.connection(connected, {"endpoint": self.config.connection.describe()})

@@ -34,9 +34,10 @@ LOGGER = logging.getLogger("modbus_adapter.publisher")
 
 
 class SignalUpdatePublisher:
-    def __init__(self, data_facade, config):
+    def __init__(self, data_facade, config, operational_metrics=None):
         self._data = data_facade              # this instance's DataFacade (gg.instance(id).data())
         self._config = config                 # ServerConfiguration
+        self._operational_metrics = operational_metrics
         self._lock = threading.Lock()
         self._pending = {}                    # (unit_id, name) -> [group, signal, [Sample, ...]]
 
@@ -69,11 +70,15 @@ class SignalUpdatePublisher:
             self._pending = {}
         for group, signal, samples in pending.values():
             if samples:
+                self._record_publish(group.publish_mode, batchFlushes=1)
                 self._publish(group, signal, samples)
 
     def _publish(self, group, signal, samples: List[Sample]) -> None:
+        t0 = datetime.now(timezone.utc)
         valued = [s for s in samples if s.value is not None]
         valueless = [s for s in samples if s.value is None]
+        published_messages = 0
+        published_samples = 0
         try:
             if valued:
                 self._data.signal(signal.signal_id(group.unit_id)) \
@@ -84,10 +89,25 @@ class SignalUpdatePublisher:
                     .add_samples(valued) \
                     .signal_path(signal.name) \
                     .publish()
+                published_messages += 1
+                published_samples += len(valued)
             if valueless:
                 self._publish_valueless(group, signal, valueless)
+                published_messages += 1
+                published_samples += len(valueless)
         except Exception as e:  # noqa: BLE001 - a publish failure must not kill the poll loop
             LOGGER.error("[%s] data publish for '%s' failed: %s", self._config.id, signal.name, e)
+            self._record_publish(group.publish_mode, publishFailures=1)
+        finally:
+            elapsed_ms = (datetime.now(timezone.utc) - t0).total_seconds() * 1000.0
+            if published_messages:
+                self._record_publish(
+                    group.publish_mode,
+                    dataMessagesPublished=published_messages,
+                    samplesPublished=published_samples,
+                    batchSize=len(samples),
+                    publishLatencyMs=elapsed_ms,
+                )
 
     def _publish_valueless(self, group, signal, samples: List[Sample]) -> None:
         """A fully failed block read carries **no value at all** for its signals -- the module
@@ -121,3 +141,7 @@ class SignalUpdatePublisher:
         if sample.source_ts is not None:
             out["sourceTs"] = sample.source_ts
         return out
+
+    def _record_publish(self, publish_mode, **values):
+        if self._operational_metrics is not None:
+            self._operational_metrics.record_publish(publish_mode, **values)

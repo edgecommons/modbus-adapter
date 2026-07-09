@@ -1,10 +1,14 @@
 """A poll group: a set of signals read together on one interval against one unit id."""
-import uuid
 
 from .signal_spec import SignalSpec
 
 ON_CHANGE = "onChange"
 ALWAYS = "always"
+
+
+def normalize_publish_mode(value):
+    """Return the bounded publish-mode vocabulary used for behavior and metric dimensions."""
+    return ALWAYS if value == ALWAYS else ON_CHANGE
 
 
 class PollGroup:
@@ -20,12 +24,12 @@ class PollGroup:
         self.signals = signals
 
     @staticmethod
-    def from_dict(o, server_config):
+    def from_dict(o, server_config, index=0):
         return PollGroup(
-            id_=o.get("id") or str(uuid.uuid4()),
+            id_=o.get("id") or f"group-{index + 1}",
             poll_interval_ms=int(o.get("pollIntervalMs", server_config.poll_interval_ms)),
             unit_id=int(o.get("unitId", server_config.connection.unit_id)),
-            publish_mode=o.get("publishMode", server_config.publish_mode),
+            publish_mode=normalize_publish_mode(o.get("publishMode", server_config.publish_mode)),
             max_gap=int(o.get("maxGap", server_config.max_gap)),
             signals=[SignalSpec.from_dict(s) for s in o.get("signals", [])],
         )

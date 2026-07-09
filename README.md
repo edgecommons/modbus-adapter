@@ -7,8 +7,9 @@ it polls register maps and republishes value changes as `SouthboundSignalUpdate`
 **Unified Namespace** `data` class (`ecv1/{device}/modbus-adapter/{instance}/data/{signal}`), serves
 on-demand reads/writes/control through the library **command inbox** (`sb/read`, `sb/write`,
 `sb/status`, `sb/signals`, `reconnect`, `repoll`), emits `evt`-class connection/write events (through
-the library's `data()`/`events()` facades), and reports the `southbound_health` metric. It runs
-wherever you deploy it — a Greengrass v2 component, a standalone process, or a Kubernetes pod.
+the library's `data()`/`events()` facades), and reports `southbound_health` plus Modbus operational
+metrics for connection, inventory, polling, publishing, and commands. It runs wherever you deploy it —
+a Greengrass v2 component, a standalone process, or a Kubernetes pod.
 
 Sibling of the Java OPC UA reference adapter; same southbound contract, the poll-based counterpart to
 OPC UA's subscribe-based model.
@@ -28,8 +29,8 @@ python main.py --platform HOST --transport MQTT validation/messaging-local.json 
 ```
 
 Subscribe to `ecv1/+/+/+/data/#` to watch telemetry (and `ecv1/+/+/+/state`, `ecv1/+/+/+/metric/#`
-for the keepalive + health). For local dev against the **sibling** edgecommons UNS library, install it
-editable into the venv first: `pip install -e ../core/libs/python`, then `pip install -e .
+for the keepalive, health, and operational metrics). For local dev against the **sibling**
+edgecommons UNS library, install it editable into the venv first: `pip install -e ../core/libs/python`, then `pip install -e .
 -r requirements-test.txt`.
 
 ## Tests

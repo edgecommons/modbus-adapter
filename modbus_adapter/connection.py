@@ -20,11 +20,12 @@ class ModbusError(Exception):
 
 
 class ModbusConnection:
-    def __init__(self, config):
+    def __init__(self, config, operational_metrics=None):
         self.config = config                      # ServerConfiguration
         self.conn = config.connection             # ConnectionInfo
         self.client = None
         self._connected = False
+        self._operational_metrics = operational_metrics
 
     def is_connected(self) -> bool:
         """LIVE liveness: whether the last read (or the initial connect) actually reached the slave.
@@ -37,15 +38,20 @@ class ModbusConnection:
         """Block, retrying every RETRY_S, until the client is created and connected."""
         while self.client is None:
             try:
+                if self._operational_metrics is not None:
+                    self._operational_metrics.record_connect_attempt()
                 client = self._create()
                 if not client.connect():
                     raise ModbusError("connect() returned False")
                 self.client = client
-                self._connected = True
+                self._set_connected(True)
                 LOGGER.info("[%s] connected to %s", self.config.id, self.conn.describe())
             except Exception as e:  # noqa: BLE001 - retry on anything
                 self.client = None
                 self._connected = False
+                if self._operational_metrics is not None:
+                    self._operational_metrics.record_connect_failure()
+                    self._operational_metrics.emit(False)
                 LOGGER.error("[%s] unable to connect to %s: %s. Retrying in %ss...",
                              self.config.id, self.conn.describe(), e, int(RETRY_S))
                 time.sleep(RETRY_S)
@@ -58,13 +64,26 @@ class ModbusConnection:
         command can reply with the error."""
         self.close()
         self.client = None
-        client = self._create()
-        if not client.connect():
-            raise ModbusError("connect() returned False")
-        self.client = client
-        self._connected = True
-        LOGGER.info("[%s] reconnected to %s", self.config.id, self.conn.describe())
-        return self.client
+        if self._operational_metrics is not None:
+            self._operational_metrics.record_reconnect_attempt()
+        client = None
+        try:
+            client = self._create()
+            if not client.connect():
+                raise ModbusError("connect() returned False")
+            self.client = client
+            self._set_connected(True)
+            LOGGER.info("[%s] reconnected to %s", self.config.id, self.conn.describe())
+            return self.client
+        except Exception:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            if self._operational_metrics is not None:
+                self._operational_metrics.record_reconnect_failure()
+            raise
 
     def _create(self):
         c = self.conn
@@ -76,6 +95,11 @@ class ModbusConnection:
         return ModbusTcpClient(c.host, port=c.port, framer=framer, timeout=c.timeout_s)
 
     # --- reads / writes (raise ModbusError on failure) -------------------------------------
+    def _set_connected(self, connected: bool):
+        if self._connected and not connected and self._operational_metrics is not None:
+            self._operational_metrics.record_connection_drop()
+        self._connected = connected
+
     def read(self, table, address, count, unit_id):
         """Return a list of bits (coil/discrete) or registers (holding/input).
 
@@ -93,12 +117,12 @@ class ModbusConnection:
         try:
             rr = readers[table](address, count=count, device_id=unit_id)
         except (ConnectionException, ModbusIOException, OSError) as e:
-            self._connected = False                 # link down (raised transport/IO error)
+            self._set_connected(False)              # link down (raised transport/IO error)
             raise ModbusError(str(e))
         if rr is None or isinstance(rr, ModbusIOException):
-            self._connected = False                 # no response / IO error -> link down
+            self._set_connected(False)              # no response / IO error -> link down
             raise ModbusError(str(rr) if rr is not None else "no response")
-        self._connected = True                       # a response arrived -> the slave is reachable
+        self._set_connected(True)                    # a response arrived -> the slave is reachable
         if rr.isError():
             raise ModbusError(str(rr))               # reachable, but this register errored (e.g. illegal address)
         data = rr.bits if table in codec.BIT_TABLES else rr.registers

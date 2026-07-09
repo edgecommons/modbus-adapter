@@ -117,6 +117,23 @@ def test_write_disabled_by_default():
     assert sc.write_enabled is False
 
 
+def test_poll_group_defaults_are_stable_and_publish_mode_is_bounded():
+    inst = {
+        "id": "plc1",
+        "defaults": {"publishMode": "typo"},
+        "pollGroups": [
+            {"signals": [{"name": "A", "table": "holding", "address": 1}]},
+            {"publishMode": "always", "signals": [{"name": "B", "table": "holding", "address": 2}]},
+            {"publishMode": "bogus", "signals": [{"name": "C", "table": "holding", "address": 3}]},
+        ],
+    }
+    sc = ServerConfiguration(FakeCM([inst]), {"defaults": {"publishMode": "also-bogus"}}, "plc1")
+
+    assert sc.publish_mode == "onChange"
+    assert [g.id for g in sc.poll_groups] == ["group-1", "group-2", "group-3"]
+    assert [g.publish_mode for g in sc.poll_groups] == ["onChange", "always", "onChange"]
+
+
 def test_uns_data_topic_and_identity():
     """Data-plane addressing now comes from the UNS builder (gg.instance(id).uns()), not a config
     template: the channel is the sanitized signal name and the topic is device/component/instance-shaped."""

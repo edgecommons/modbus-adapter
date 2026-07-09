@@ -133,6 +133,14 @@ the Downward API).
 - **Metric** `southbound_health` (`connectionState`, `readErrors`) — with `metricEmission.target:
   messaging` it auto-publishes on the UNS `metric` class
   (`ecv1/{device}/modbus-adapter/main/metric/southbound_health`); `log`/`cloudwatch`/`prometheus` also work.
+- **Operational metrics** `ModbusConnection`, `ModbusInventory`, `ModbusPoll`, `ModbusPublish`, and
+  `ModbusCommand` — low-cardinality metric families intended for CloudWatch/Prometheus dashboards.
+  Their dimensions use instance, connection type, poll group, table, publish mode, command verb, and
+  result only; signal names, addresses, endpoint URLs, and error text are not dimensions.
+  Use `ModbusPoll` for poll health (`pollCycles`, `protocolReadErrors`, `samplesBad`,
+  `pollOverruns`), `ModbusPublish` for data-plane output (`dataMessagesPublished`,
+  `samplesPublished`, `publishFailures`), `ModbusConnection` for link state and reconnect pressure, and
+  `ModbusCommand` for control-plane request volume, latency, and errors.
 - **State keepalive:** the library publishes `ecv1/{device}/modbus-adapter/main/state` every ~5 s; the
   RUNNING keepalive also carries an `instances[]` array (`{instance, connected, detail}`) — each
   configured slave's live up/down state and endpoint.

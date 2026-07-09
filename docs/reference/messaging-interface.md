@@ -38,7 +38,7 @@ Request/reply carries `header.reply_to` + `header.correlation_id`; the reply is 
 | `cmd` | `sb/signals` | bus → adapter | `ecv1/{device}/modbus-adapter/main/cmd/sb/signals` | `{ok,result}` |
 | `cmd` | `reconnect` | bus → adapter | `ecv1/{device}/modbus-adapter/main/cmd/reconnect` | `{ok,result}` |
 | `cmd` | `repoll` | bus → adapter | `ecv1/{device}/modbus-adapter/main/cmd/repoll` | `{ok,result}` |
-| `metric` | `southbound_health` | adapter → bus (auto) | `ecv1/{device}/modbus-adapter/main/metric/southbound_health` | — |
+| `metric` | `southbound_health`, `ModbusConnection`, `ModbusInventory`, `ModbusPoll`, `ModbusPublish`, `ModbusCommand` | adapter → bus (auto) | `ecv1/{device}/modbus-adapter/main/metric/{metricName}` | — |
 | `state` | keepalive | adapter → bus (auto) | `ecv1/{device}/modbus-adapter/main/state` | — |
 
 Fleet consumers subscribe the six UNS wildcards — telemetry is one filter,
@@ -170,7 +170,8 @@ per-adapter knowledge of the channel shape.
 
 The metric subsystem publishes it on the reserved `metric` class
 (`ecv1/{device}/modbus-adapter/main/metric/southbound_health`) — the component never addresses that
-topic itself.
+topic itself. This compatibility metric remains intentionally small; richer operational detail is
+reported by the Modbus-specific metric families below.
 
 | Measure | Unit | Meaning |
 |---------|------|---------|
@@ -178,6 +179,88 @@ topic itself.
 | `readErrors` | Count | read errors over the interval |
 
 Dimension: `instance` (plus auto `coreName`/`component`).
+
+### Modbus operational metrics (reserved class — automatic)
+
+The adapter also emits Modbus-specific metric families through `MetricEmitter`; with
+`metricEmission.target: messaging` they publish to
+`ecv1/{device}/modbus-adapter/main/metric/{metricName}`, and with CloudWatch or Prometheus they use
+the same metric names/categories. Dimensions are intentionally low-cardinality and CloudWatch-friendly:
+`instance`, plus the listed dimensions, plus library-injected `coreName`, `component`, and
+`category=<metricName>`. Signal names, Modbus addresses, endpoint URLs, and error text are never metric
+dimensions.
+
+#### `ModbusConnection`
+
+Dimensions: `instance`, `connectionType`.
+
+| Measure | Unit | Meaning |
+|---------|------|---------|
+| `connectionState` | Count | `1` connected, `0` down |
+| `connectAttempts` | Count | initial connect attempts in the interval |
+| `connectFailures` | Count | failed initial connect attempts in the interval |
+| `reconnectAttempts` | Count | explicit reconnect attempts in the interval |
+| `reconnectFailures` | Count | failed explicit reconnect attempts in the interval |
+| `connectionDrops` | Count | live links marked down by transport/IO/no-response reads |
+| `connectedDurationMs` | Milliseconds | time spent connected since the previous metric emission |
+
+#### `ModbusInventory`
+
+Dimensions: `instance`, `pollGroup`, `table`.
+
+| Measure | Unit | Meaning |
+|---------|------|---------|
+| `configuredSignals` | Count | configured signals in this poll group/table |
+| `readBlocks` | Count | coalesced Modbus read blocks for this poll group/table |
+| `configuredPollIntervalMs` | Milliseconds | configured poll interval for the group |
+| `coalescingRatio` | None | configured signals divided by read blocks |
+| `writableSignals` | Count | configured signals on writable Modbus tables (`coil`, `holding`) when instance writes are enabled; otherwise `0` |
+
+#### `ModbusPoll`
+
+Dimensions: `instance`, `pollGroup`, `table`, `result` (`success` or `error`).
+
+| Measure | Unit | Meaning |
+|---------|------|---------|
+| `pollCycles` | Count | poll cycles observed for this group/table/result |
+| `pollDurationMs` | Milliseconds | accumulated poll work time |
+| `protocolReadRequests` | Count | Modbus protocol read requests issued |
+| `protocolReadErrors` | Count | failed protocol read requests |
+| `registersRead` | Count | Modbus elements read from successful blocks |
+| `signalsDecoded` | Count | signals decoded successfully |
+| `samplesGood` | Count | GOOD samples produced by poll decoding |
+| `samplesBad` | Count | BAD samples produced from read/decode failures |
+| `samplesChanged` | Count | samples offered for publishing after publish-mode/deadband checks |
+| `samplesSuppressed` | Count | decoded samples suppressed by `onChange`/deadband |
+| `pollOverruns` | Count | poll loops whose work exceeded the configured interval |
+
+#### `ModbusPublish`
+
+Dimensions: `instance`, `publishMode` (`onChange` or `always`; invalid config values are normalized to `onChange`).
+
+| Measure | Unit | Meaning |
+|---------|------|---------|
+| `dataMessagesPublished` | Count | `SouthboundSignalUpdate` messages published |
+| `samplesPublished` | Count | samples included in published data messages |
+| `publishFailures` | Count | data publish failures swallowed by the adapter |
+| `batchFlushes` | Count | buffered signal batches flushed |
+| `batchSize` | Count | samples in flushed or published batches |
+| `publishLatencyMs` | Milliseconds | publish call latency accumulated over the interval |
+
+#### `ModbusCommand`
+
+Dimensions: `instance`, `verb`, `result` (`success` or `error`).
+
+| Measure | Unit | Meaning |
+|---------|------|---------|
+| `commandRequests` | Count | command handler invocations |
+| `commandLatencyMs` | Milliseconds | command handler latency accumulated over the interval |
+| `commandErrors` | Count | command handlers that raised a coded error |
+| `readSignals` | Count | signals returned by `sb/read` |
+| `writeSignals` | Count | write entries supplied to `sb/write` |
+| `writeFailures` | Count | `sb/write` entries reported as failed |
+| `reconnectRequests` | Count | explicit reconnect command requests |
+| `repollRequests` | Count | explicit repoll command requests |
 
 ## State keepalive (`state` class, reserved — automatic)
 

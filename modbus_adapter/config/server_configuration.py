@@ -6,7 +6,7 @@ command surface address the Unified Namespace via ``gg.uns()`` / the command inb
 publish / write / read / control topic templates are gone.
 """
 from .connection_info import ConnectionInfo
-from .poll_group import PollGroup
+from .poll_group import ON_CHANGE, PollGroup, normalize_publish_mode
 
 
 class ServerConfiguration:
@@ -28,7 +28,7 @@ class ServerConfiguration:
             return fallback
 
         self.poll_interval_ms = int(_default("pollIntervalMs", 1000))
-        self.publish_mode = _default("publishMode", "onChange")
+        self.publish_mode = normalize_publish_mode(_default("publishMode", ON_CHANGE))
         self.max_gap = int(_default("maxGap", 0))
 
         pub = inst.get("publish", {})
@@ -37,7 +37,9 @@ class ServerConfiguration:
         write = inst.get("write", {})
         self.write_enabled = write.get("enabled", False) is True
 
-        self.poll_groups = [PollGroup.from_dict(g, self) for g in inst.get("pollGroups", [])]
+        self.poll_groups = [
+            PollGroup.from_dict(g, self, i) for i, g in enumerate(inst.get("pollGroups", []))
+        ]
 
     def all_signals(self):
         """(poll_group, signal) for every configured signal — used by the command/control surfaces."""

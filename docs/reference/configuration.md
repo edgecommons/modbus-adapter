@@ -20,18 +20,23 @@ sibling sections (`tags`, `hierarchy`, `identity`, `topic`, `messaging`, `loggin
 | `identity` | optional | Values for every hierarchy level except the last (which is the resolved thing name). |
 | `topic` | optional | `includeRoot` (default `false`) — insert the site level after `ecv1` on a multi-site broker. |
 | `messaging` | HOST/KUBERNETES | MQTT broker connection (or `--transport MQTT <file>`). |
-| `metricEmission` | optional | Routes `southbound_health` (`target`: `log`/`messaging`/`cloudwatch`/`prometheus`). `messaging` auto-routes to the UNS `metric` class. |
+| `metricEmission` | optional | Routes `southbound_health` plus the Modbus operational metric families (`ModbusConnection`, `ModbusInventory`, `ModbusPoll`, `ModbusPublish`, `ModbusCommand`) to `log`/`messaging`/`cloudwatch`/`prometheus`. `messaging` auto-routes to the UNS `metric` class. |
 | `logging`, `heartbeat` | optional | Standard edgecommons sections. |
 
 UNS topics are `ecv1/{device}/{component}/{instance}/{class}[/channel]` — built and validated by the
 library from the identity above; there are no per-instance/per-signal topic templates.
+
+Operational metric dimensions are deliberately low-cardinality for CloudWatch: `instance`,
+`connectionType`, `pollGroup`, `table`, `publishMode`, `verb`, and `result`, plus library-provided
+component dimensions. Signal names, addresses, endpoint URLs, unit ids, and raw error text are not metric
+dimensions; they stay in data, events, logs, or command replies.
 
 ## `component.global.defaults`
 
 | Key | Type | Default | Definition |
 |-----|------|---------|-----------|
 | `pollIntervalMs` | number | `1000` | Fallback poll interval for a group. |
-| `publishMode` | string | `onChange` | `onChange` (publish when the value changes past its deadband) or `always` (every poll). |
+| `publishMode` | string | `onChange` | `onChange` (publish when the value changes past its deadband) or `always` (every poll). Any other value is treated as `onChange`. |
 | `batchMs` | number | `0` | If `>0`, buffer a signal's samples and publish one message per `batchMs`; `0` = publish each immediately. |
 | `maxGap` | number | `0` | Max address gap the poller will bridge when coalescing signals into one Modbus read. |
 
@@ -62,10 +67,10 @@ library from the identity above; there are no per-instance/per-signal topic temp
 
 | Key | Type | Default | Definition |
 |-----|------|---------|-----------|
-| `id` | string | random | Group id (logs + the `sb/signals` control query). |
+| `id` | string | `group-N` | Stable group id (logs, metrics, and the `sb/signals` control query). |
 | `pollIntervalMs` | number | instance default | How often this group is read. |
 | `unitId` | number | connection `unitId` | Modbus unit id for this group's reads. |
-| `publishMode` | string | instance default | `onChange` / `always`. |
+| `publishMode` | string | instance default | `onChange` / `always`; any other value is treated as `onChange`. |
 | `maxGap` | number | instance default | Coalescing gap (registers/bits). |
 | `signals` | array | `[]` | The signals (below). |
 

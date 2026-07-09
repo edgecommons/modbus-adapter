@@ -397,10 +397,11 @@ the read/write/control surface is served by the library **command inbox**
 HOST, IPC on Greengrass). On-box consumers read those topics.
 
 **What the adapter sends to the cloud itself.** The one northbound path the adapter wires directly is
-its own *operational* telemetry — the heartbeat and the health metric. The library can deliver them
-straight to AWS IoT Core alongside the local bus: on `HOST`/`KUBERNETES` the dual-MQTT provider holds
-the northbound mTLS session next to the local one. Opt in with `messaging.northbound` plus a heartbeat /
-metric target set to `destination: "northbound"`:
+its own *operational* telemetry — the heartbeat, `southbound_health`, and the Modbus operational metric
+families (`ModbusConnection`, `ModbusInventory`, `ModbusPoll`, `ModbusPublish`, `ModbusCommand`). The
+library can deliver them straight to AWS IoT Core alongside the local bus: on `HOST`/`KUBERNETES` the
+dual-MQTT provider holds the northbound mTLS session next to the local one. Opt in with
+`messaging.northbound` plus a heartbeat / metric target set to `destination: "northbound"`:
 
 ```jsonc
 {
@@ -418,7 +419,8 @@ metric target set to `destination: "northbound"`:
     }
   },
 
-  // Heartbeat and health go to IoT Core (low rate); register data stays on the local bus.
+  // Heartbeat, health, and operational metrics go to IoT Core (low rate);
+  // register data stays on the local bus.
   "heartbeat": {
     "intervalSecs": 30,
     "destination": "iotcore",
@@ -431,7 +433,7 @@ metric target set to `destination: "northbound"`:
 }
 ```
 
-The heartbeat keepalive rides the UNS `state` class and the metric the `metric` class automatically —
+The heartbeat keepalive rides the UNS `state` class and metrics ride the `metric` class automatically —
 `destination: "northbound"` routes those reserved-class publishes to IoT Core instead of the local broker.
 
 On `GREENGRASS` the same `destination: "northbound"` routes through the Nucleus' IoT Core connection, so
@@ -556,7 +558,7 @@ ComponentConfiguration:
 |--------|--------|
 | `--platform GREENGRASS` (in the recipe `Run`) | Selects IPC messaging and `GG_CONFIG` as the config source; publishes route through the Nucleus rather than a broker. The recipe's `accessControl` grants pub/sub on IPC and IoT Core. |
 | `heartbeat.*` | Standard edgecommons heartbeat — the UNS `state` keepalive (`ecv1/{device}/modbus-adapter/main/state`) plus CPU/memory/disk `sys` measures. Independent of Modbus polling; `destination` (default `local`) is the local channel on GG IPC. |
-| `metricEmission.target: log` | Routes the `southbound_health` metric to a rotating log file (vs `messaging`/`cloudwatch`/`prometheus`). `{ComponentFullName}` resolves to the deployed component name. |
+| `metricEmission.target: log` | Routes `southbound_health` and the Modbus operational metrics to a rotating log file (vs `messaging`/`cloudwatch`/`prometheus`). `{ComponentFullName}` resolves to the deployed component name. |
 | signal `scale` | `Scaled` publishes `raw × 0.1` (raw `123` → `12.3`); a scaled integer is emitted as a float. |
 
 On startup each instance's `connect()` **blocks and retries every 5 s** until the device answers, so a
@@ -617,7 +619,7 @@ data:
 | `messaging.local.host` | Point at an **in-cluster** broker Service DNS name (`emqx.default.svc.cluster.local`). |
 | `connection.host` | Point at the device/gateway's **Service** or reachable address — the adapter runs in-cluster, so the device must be reachable from the pod network. |
 | Identity (no `-t`) | The Thing name resolves from the Downward API (`EDGECOMMONS_THING_NAME` ▸ `POD_NAME`), so the `{device}` token of every UNS topic is the pod name unless overridden. |
-| `metricEmission.target: prometheus` | Exposes the `southbound_health` metric as OpenMetrics text at `:9090/metrics` for scraping (the default metric target on KUBERNETES). |
+| `metricEmission.target: prometheus` | Exposes `southbound_health` and the Modbus operational metrics as OpenMetrics text at `:9090/metrics` for scraping (the default metric target on KUBERNETES). |
 | Health/probes | The Deployment exposes the library's HTTP health endpoint (`/startupz`, `/livez`, `/readyz`) for k8s probes. |
 
 Polling, type, deadband, and command behavior are identical to the other platforms — only the config
@@ -680,8 +682,9 @@ its own worker/connection). `connection.timeoutMs` bounds each individual reques
 out, errors, or returns a Modbus exception marks **every signal in that read block** with quality `BAD`
 (value `null`) and increments the `readErrors` counter, while the loop stays alive and retries on the
 next interval. The `southbound_health` metric's `connectionState` (1/0) and `readErrors` reflect this;
-it is emitted to `metricEmission.target` (auto-routing to the UNS `metric` class under `messaging`) and
-queryable via the `sb/status` command verb. A link up/down transition also raises/clears a `critical`
+the richer `ModbusConnection` and `ModbusPoll` metric families add attempt/drop/read-block counters.
+Metrics are emitted to `metricEmission.target` (auto-routing to the UNS `metric` class under
+`messaging`) and the compatibility counters remain queryable via the `sb/status` command verb. A link up/down transition also raises/clears a `critical`
 alarm on `evt/critical/connection` immediately (the same channel for the drop and the restore, so a
 console tracking `evt/critical/#` sees both ends). Each instance's current up/down state is additionally
 surfaced per-slave in the `main` `state` keepalive's `instances[]` array (`{instance, connected, detail}`),

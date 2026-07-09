@@ -41,7 +41,9 @@ mosquitto_sub -t 'ecv1/+/+/+/data/#' -v
 You'll see `SouthboundSignalUpdate` messages on `ecv1/modbus-thing/modbus-adapter/plc1/data/{signal}`
 for the changing signals (e.g. `Counter16`, `Temp`), each with a `value`, normalized `quality`, a
 Modbus `address` (`{unitId, table, address, type}`), and the top-level `identity`. (Also try
-`ecv1/+/+/+/state` for the keepalive and `ecv1/+/+/+/metric/#` for `southbound_health`.)
+`ecv1/+/+/+/state` for the keepalive and `ecv1/+/+/+/metric/#` for `southbound_health` plus the
+`ModbusConnection`, `ModbusInventory`, `ModbusPoll`, `ModbusPublish`, and `ModbusCommand` operational
+metric groups.)
 
 ## 5. Read a signal on demand
 
