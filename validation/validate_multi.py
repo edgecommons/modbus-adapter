@@ -3,7 +3,7 @@
 Confirms both instances stream concurrently on their own UNS data topics with the correct per-instance
 identity (top-level identity.instance + body device.instance/endpoint), and that an on-demand read
 addressed (by the request-body 'instance' selector) to each instance routes to that server only. The
-command inbox is the shared main-instance inbox; the instance selector fans it out. Start two sims
+command inbox is a single component-scope inbox; the instance selector fans it out. Start two sims
 (ports 5020, 5021) and the adapter on config-multi.json.
 """
 import json
@@ -101,7 +101,7 @@ def main():
             device, comp = parts[1], parts[2]
             break
     if device:
-        cmd_base = f"ecv1/{device}/{comp}/main/cmd"
+        cmd_base = f"ecv1/{device}/{comp}/cmd"
         r1 = request(c, cmd_base, "sb/read", {"instance": "plc1", "signals": [{"name": "Counter16"}]})
         r2 = request(c, cmd_base, "sb/read", {"instance": "plc2", "signals": [{"name": "Counter16"}]})
         check("plc1 read routes", bool(result_of(r1).get("reads")) and result_of(r1)["reads"][0]["quality"] == "GOOD")

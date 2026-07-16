@@ -1,9 +1,9 @@
 """The on-demand command surface for one device instance: batch write, batch read, and the
 status / signals / reconnect / repoll control queries.
 
-Since the UNS migration these are served through the library-owned **command inbox** (the
-``gg.get_commands()`` facade) rather than per-instance legacy topics: ``main.py`` registers the verbs
-once on the shared ``main``-instance inbox (``ecv1/{device}/modbus-adapter/main/cmd/#``) and dispatches
+These are served through the library-owned **command inbox** (the
+``gg.get_commands()`` facade) rather than per-instance topics: ``main.py`` registers the verbs
+once on the component-scope inbox (``ecv1/{device}/modbus-adapter/cmd/#``) and dispatches
 each into the right device by the request body's ``instance`` selector. Each method here returns the
 verb result object (which the inbox wraps as ``{"ok": true, "result": ...}``) or raises
 :class:`~edgecommons.command_inbox.CommandException` for a coded error reply.

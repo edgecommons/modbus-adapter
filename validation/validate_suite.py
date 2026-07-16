@@ -3,7 +3,7 @@
 Covers: write->read-back for every supported type; scale + bit decode; a non-default word-order
 round-trip; addressing by explicit {table,address,type} ref; BAD quality on an illegal address;
 the changing-signal stream; and the control verbs. Telemetry rides the UNS data class and commands
-ride the main-instance command inbox. Run the sim + adapter on validation/config.json first.
+ride the component-scope command inbox. Run the sim + adapter on validation/config.json first.
 """
 import json
 import sys
@@ -92,7 +92,7 @@ def main():
         sys.exit(1)
     parts = updates()[0][0].split("/")
     device, comp, inst = parts[1], parts[2], parts[3]
-    cmd_base = f"ecv1/{device}/{comp}/main/cmd"
+    cmd_base = f"ecv1/{device}/{comp}/cmd"
 
     # --- write every type, then read back -------------------------------------------------
     write(c, cmd_base, inst, [{"name": n, "value": v} for n, (_, v) in WRITES.items()])

@@ -32,14 +32,14 @@ Request/reply carries `header.reply_to` + `header.correlation_id`; the reply is 
 |-------|---------|-----------|-------|-------|
 | `data` | `SouthboundSignalUpdate` | adapter → bus | `ecv1/{device}/modbus-adapter/{instance}/data/{signal}` | — |
 | `evt` | `evt` | adapter → bus | `ecv1/{device}/modbus-adapter/{instance}/evt/{severity}/{connection\|write}` | — |
-| `cmd` | `sb/read` | bus → adapter | `ecv1/{device}/modbus-adapter/main/cmd/sb/read` | `{ok,result}` |
-| `cmd` | `sb/write` | bus → adapter | `ecv1/{device}/modbus-adapter/main/cmd/sb/write` | `{ok,result}` |
-| `cmd` | `sb/status` | bus → adapter | `ecv1/{device}/modbus-adapter/main/cmd/sb/status` | `{ok,result}` |
-| `cmd` | `sb/signals` | bus → adapter | `ecv1/{device}/modbus-adapter/main/cmd/sb/signals` | `{ok,result}` |
-| `cmd` | `reconnect` | bus → adapter | `ecv1/{device}/modbus-adapter/main/cmd/reconnect` | `{ok,result}` |
-| `cmd` | `repoll` | bus → adapter | `ecv1/{device}/modbus-adapter/main/cmd/repoll` | `{ok,result}` |
-| `metric` | `southbound_health`, `ModbusConnection`, `ModbusInventory`, `ModbusPoll`, `ModbusPublish`, `ModbusCommand` | adapter → bus (auto) | `ecv1/{device}/modbus-adapter/main/metric/{metricName}` | — |
-| `state` | keepalive | adapter → bus (auto) | `ecv1/{device}/modbus-adapter/main/state` | — |
+| `cmd` | `sb/read` | bus → adapter | `ecv1/{device}/modbus-adapter/cmd/sb/read` | `{ok,result}` |
+| `cmd` | `sb/write` | bus → adapter | `ecv1/{device}/modbus-adapter/cmd/sb/write` | `{ok,result}` |
+| `cmd` | `sb/status` | bus → adapter | `ecv1/{device}/modbus-adapter/cmd/sb/status` | `{ok,result}` |
+| `cmd` | `sb/signals` | bus → adapter | `ecv1/{device}/modbus-adapter/cmd/sb/signals` | `{ok,result}` |
+| `cmd` | `reconnect` | bus → adapter | `ecv1/{device}/modbus-adapter/cmd/reconnect` | `{ok,result}` |
+| `cmd` | `repoll` | bus → adapter | `ecv1/{device}/modbus-adapter/cmd/repoll` | `{ok,result}` |
+| `metric` | `southbound_health`, `ModbusConnection`, `ModbusInventory`, `ModbusPoll`, `ModbusPublish`, `ModbusCommand` | adapter → bus (auto) | `ecv1/{device}/modbus-adapter/metric/{metricName}` | — |
+| `state` | keepalive | adapter → bus (auto) | `ecv1/{device}/modbus-adapter/state` | — |
 
 Fleet consumers subscribe the six UNS wildcards — telemetry is one filter,
 `ecv1/+/+/+/data/#`; events `ecv1/+/+/+/evt/#`; metrics `ecv1/+/+/+/metric/#`; state
@@ -50,8 +50,8 @@ facades and `cmd` replies via the command inbox — never a hand-assembled topic
 ## The command inbox
 
 The read/write/control surface is served through the library's **command inbox** — a single
-subscription `ecv1/{device}/modbus-adapter/main/cmd/#` (the shared `main` instance; there are no
-per-instance inboxes). A request's **verb** is the topic channel after `cmd/` and must equal
+component-scope subscription `ecv1/{device}/modbus-adapter/cmd/#` (the instance token is optional and
+present only for explicit multi-instance addressing). A request's **verb** is the topic channel after `cmd/` and must equal
 `header.name`. Built-in verbs (`ping`, `reload-config`, `get-configuration`) ship with every component;
 the adapter adds the `sb/*` + `reconnect`/`repoll` verbs below.
 
@@ -169,14 +169,14 @@ per-adapter knowledge of the channel shape.
 ## Metrics (`metric` class, reserved — automatic)
 
 The metric subsystem publishes health and Modbus operational metrics on the reserved `metric` class
-(`ecv1/{device}/modbus-adapter/main/metric/{metricName}`) through `MetricEmitter`; the component never
+(`ecv1/{device}/modbus-adapter/metric/{metricName}`) through `MetricEmitter`; the component never
 addresses that topic itself. For every metric's dimensions, measures, units, and diagnostic purpose,
 see [Reference - Metrics](metrics.md).
 
 ## State keepalive (`state` class, reserved — automatic)
 
 The library's heartbeat publishes the `state` keepalive on the reserved `state` class
-(`ecv1/{device}/modbus-adapter/main/state`) every ~5 s — the component never addresses that topic
+(`ecv1/{device}/modbus-adapter/state`) every ~5 s — the component never addresses that topic
 itself. The RUNNING keepalive also carries an **`instances`** array: one entry per configured slave
 (`component.instances[]`), so a fleet consumer sees every slave's up/down state under the one component
 without a separate UNS instance per slave (identity, data, and lifecycle stay under `main`).

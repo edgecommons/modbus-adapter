@@ -6,8 +6,8 @@
      and the resulting evt/write audit event.
   D: control verbs (sb/status, sb/signals).
 
-Telemetry rides ecv1/{device}/modbus-adapter/{instance}/data/#; commands ride the main-instance inbox
-ecv1/{device}/modbus-adapter/main/cmd/{verb} (verbs sb/read, sb/write, sb/status, sb/signals), with the
+Telemetry rides ecv1/{device}/modbus-adapter/{instance}/data/#; commands ride the component-scope inbox
+ecv1/{device}/modbus-adapter/cmd/{verb} (verbs sb/read, sb/write, sb/status, sb/signals), with the
 target instance carried in the request body. Replies are {"ok":true,"result":...} on the request's
 reply_to.
 """
@@ -105,7 +105,7 @@ def main():
     # UNS data topic: ecv1/{device}/{component}/{instance}/data/{signal}
     parts = updates()[0][0].split("/")
     device, comp, inst = parts[1], parts[2], parts[3]
-    cmd_base = f"ecv1/{device}/{comp}/main/cmd"     # the main-instance command inbox
+    cmd_base = f"ecv1/{device}/{comp}/cmd"     # the component-scope command inbox
     print(f"[*] device={device} component={comp} instance={inst}", flush=True)
     check("data class topic", parts[4] == "data", updates()[0][0])
 

@@ -70,8 +70,9 @@ Two consequences worth internalizing:
 
 Keeping them separate means a consumer can fire a control verb without perturbing the telemetry
 stream, and routing/partitioning can key on the data-plane topic alone. The command inbox is a single
-`main`-instance subscription (`ecv1/{device}/modbus-adapter/main/cmd/#`); a multi-instance adapter picks
-the target device with an `instance` field in the request body.
+component-scope subscription (`ecv1/{device}/modbus-adapter/cmd/#`); the instance token is optional and
+appears only for explicit multi-instance addressing. A multi-instance adapter picks the target device
+with an `instance` field in the request body.
 
 Metrics deliberately stay low-cardinality. `southbound_health` answers the common binary question
 (`connectionState`, interval `readErrors`), while the richer groups describe connection attempts,

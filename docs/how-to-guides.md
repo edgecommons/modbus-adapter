@@ -58,14 +58,14 @@ registers / 2000 bits); `maxGap` lets it bridge small holes between signals.
 
 ## Read and write signals from a client
 
-Both go through the library **command inbox** (`ecv1/{device}/modbus-adapter/main/cmd/{verb}`). Set
+Both go through the library **command inbox** (`ecv1/{device}/modbus-adapter/cmd/{verb}`). Set
 `header.name` to the verb, `header.reply_to` + `header.correlation_id` for the reply, and select the
 device with `instance` in the body (optional with one device). The reply is
 `{ "ok": true, "result": … }`.
 
 **Write** (needs `write.enabled: true`):
 ```
-publish   ecv1/<device>/modbus-adapter/main/cmd/sb/write
+publish   ecv1/<device>/modbus-adapter/cmd/sb/write
           { "header": { "name": "sb/write", "reply_to": "app/r", "correlation_id": "7" },
             "body": { "instance": "plc1", "writes": [ { "name": "Setpoint", "value": 42.5 } ] } }
 subscribe app/r   → { "ok": true, "result": { "written": 1, "results": [ … ] } }
@@ -73,7 +73,7 @@ subscribe app/r   → { "ok": true, "result": { "written": 1, "results": [ … ]
 
 **Read** — request/reply:
 ```
-publish   ecv1/<device>/modbus-adapter/main/cmd/sb/read
+publish   ecv1/<device>/modbus-adapter/cmd/sb/read
           { "header": { "name": "sb/read", "reply_to": "app/r", "correlation_id": "8" },
             "body": { "instance": "plc1", "signals": [ { "name": "Temperature" } ] } }
 subscribe app/r   → { "ok": true, "result": { "id": "plc1", "reads": [ … ] } }
@@ -132,7 +132,7 @@ the Downward API).
 
 - **Metric** `southbound_health` (`connectionState`, `readErrors`) — with `metricEmission.target:
   messaging` it auto-publishes on the UNS `metric` class
-  (`ecv1/{device}/modbus-adapter/main/metric/southbound_health`); `log`/`cloudwatch`/`prometheus` also work.
+  (`ecv1/{device}/modbus-adapter/metric/southbound_health`); `log`/`cloudwatch`/`prometheus` also work.
 - **Operational metrics** `ModbusConnection`, `ModbusInventory`, `ModbusPoll`, `ModbusPublish`, and
   `ModbusCommand` — low-cardinality metric families intended for CloudWatch/Prometheus dashboards.
   Their dimensions use instance, connection type, poll group, table, publish mode, command verb, and
@@ -141,7 +141,7 @@ the Downward API).
   `pollOverruns`), `ModbusPublish` for data-plane output (`dataMessagesPublished`,
   `samplesPublished`, `publishFailures`), `ModbusConnection` for link state and reconnect pressure, and
   `ModbusCommand` for control-plane request volume, latency, and errors.
-- **State keepalive:** the library publishes `ecv1/{device}/modbus-adapter/main/state` every ~5 s; the
+- **State keepalive:** the library publishes `ecv1/{device}/modbus-adapter/state` every ~5 s; the
   RUNNING keepalive also carries an `instances[]` array (`{instance, connected, detail}`) — each
   configured slave's live up/down state and endpoint.
 - **Events:** `evt/critical/connection` (link up/down per instance, a stateful alarm — raised on
