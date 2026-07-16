@@ -14,7 +14,7 @@ ComponentConfiguration:
       logging:
         level: "INFO"
         python_format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-      # UNS state keepalive (ecv1/{device}/modbus-adapter/main/state) + system 'sys' measures.
+      # UNS state keepalive (ecv1/{device}/modbus-adapter/state) + system 'sys' measures.
       heartbeat:
         intervalSecs: 5
         measures:

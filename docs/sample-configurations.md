@@ -393,7 +393,7 @@ local MQTT broker on `HOST`/`KUBERNETES`. That is the adapter's data plane: `Sig
 every `SouthboundSignalUpdate` on the UNS `data` class through the instance's `data()` facade (which
 constructs the body and mints the topic), and
 the read/write/control surface is served by the library **command inbox**
-(`ecv1/{device}/modbus-adapter/main/cmd/#`) — both on the default provider channel (the local broker on
+(`ecv1/{device}/modbus-adapter/cmd/#`) — both on the default provider channel (the local broker on
 HOST, IPC on Greengrass). On-box consumers read those topics.
 
 **What the adapter sends to the cloud itself.** The one northbound path the adapter wires directly is
@@ -557,7 +557,7 @@ ComponentConfiguration:
 | Option | Effect |
 |--------|--------|
 | `--platform GREENGRASS` (in the recipe `Run`) | Selects IPC messaging and `GG_CONFIG` as the config source; publishes route through the Nucleus rather than a broker. The recipe's `accessControl` grants pub/sub on IPC and IoT Core. |
-| `heartbeat.*` | Standard edgecommons heartbeat — the UNS `state` keepalive (`ecv1/{device}/modbus-adapter/main/state`) plus CPU/memory/disk `sys` measures. Independent of Modbus polling; `destination` (default `local`) is the local channel on GG IPC. |
+| `heartbeat.*` | Standard edgecommons heartbeat — the UNS `state` keepalive (`ecv1/{device}/modbus-adapter/state`) plus CPU/memory/disk `sys` measures. Independent of Modbus polling; `destination` (default `local`) is the local channel on GG IPC. |
 | `metricEmission.target: log` | Routes `southbound_health` and the Modbus operational metrics to a rotating log file (vs `messaging`/`cloudwatch`/`prometheus`). `{ComponentFullName}` resolves to the deployed component name. |
 | signal `scale` | `Scaled` publishes `raw × 0.1` (raw `123` → `12.3`); a scaled integer is emitted as a float. |
 
@@ -694,7 +694,7 @@ driven by the same live poll reads (not a cached client flag), so a mid-session 
 ### Reads vs writes (the command surface)
 
 Polling is the read **plane**. The command surface is separate — served by the library command inbox
-(`ecv1/{device}/modbus-adapter/main/cmd/{verb}`), with the target device selected by an `instance` field
+(`ecv1/{device}/modbus-adapter/cmd/{verb}`), with the target device selected by an `instance` field
 in the request body. Every reply is `{ "ok": true, "result": … }` or `{ "ok": false, "error": … }`.
 
 - **Writes** (`sb/write`) require `write.enabled: true` (otherwise a `WRITE_DISABLED` error).

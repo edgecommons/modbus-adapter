@@ -5,10 +5,10 @@ ModbusDevice (its connection blocks/retries independently, so one device down do
 others). The library owns SIGTERM/SIGINT → graceful shutdown.
 
 The on-demand command surface is served through the library's **command inbox**
-(``runtime.get_commands()``): the verbs are registered once here on the shared ``main``-instance inbox
-(``ecv1/{device}/modbus-adapter/main/cmd/#``) and dispatched into the right device by the request
-body's ``instance`` selector (the shipped inbox is ``main``-instance only; per-instance inboxes are a
-later UNS phase). Data (``data``), events (``evt``), the ``state`` keepalive, the ``southbound_health``
+(``runtime.get_commands()``): the verbs are registered once here on the component-scope inbox
+(``ecv1/{device}/modbus-adapter/cmd/#``) and dispatched into the right device by the request
+body's ``instance`` selector (the instance token is optional and present only for explicit
+multi-instance addressing). Data (``data``), events (``evt``), the ``state`` keepalive, the ``southbound_health``
 + ``sys`` metrics, and the ``cfg`` publisher all ride the UNS classes automatically.
 """
 import argparse
@@ -49,7 +49,7 @@ def main():
 
     def resolve_device(body):
         """Pick the target device by the request body's 'instance' selector. With a single configured
-        device the selector is optional; otherwise it is required (the shared inbox is main-only)."""
+        device the selector is optional; otherwise it is required (a single command inbox serves all devices)."""
         inst = body.get("instance")
         if inst is None:
             if len(devices) == 1:
@@ -62,7 +62,7 @@ def main():
                                    f"no ready device instance '{inst}' (ready: {sorted(devices)})")
         return device
 
-    # Register the Modbus command verbs on the shared main-instance inbox (once). Handlers fan out to
+    # Register the Modbus command verbs on the component-scope command inbox (once). Handlers fan out to
     # the addressed device; each returns the verb result (wrapped as {"ok":true,"result":...}) or
     # raises CommandException for a coded error reply.
     commands = runtime.get_commands()
@@ -77,9 +77,10 @@ def main():
     else:
         logger.warning("No command inbox (unresolved identity) — command surface disabled")
 
-    # Report each configured slave's connectivity AT THE INSTANCE LEVEL via the component's main state
+    # Report each configured slave's connectivity AT THE INSTANCE LEVEL via the component's state
     # keepalive's instances[] (the #1c surface): a slave whose device has not (re)connected reads
-    # disconnected. Identity/data/lifecycle stay under `main`; this is the per-slave connectivity view.
+    # disconnected. Identity and the state/lifecycle keepalive stay at component scope; this is the
+    # per-slave connectivity view.
     def _instance_connectivity():
         out = []
         for iid in config_manager.get_instance_ids():

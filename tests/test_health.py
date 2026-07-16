@@ -1,9 +1,9 @@
 """Unit tests for the southbound_health metric wiring (HealthMetrics) using a fake metric emitter.
 
-Since the UNS change, the ``messaging`` metric target auto-routes ``southbound_health`` onto the
-reserved ``metric`` class (ecv1/{device}/modbus-adapter/main/metric/southbound_health) inside the
-metric subsystem — the component still just defines the metric and emits measures, so this wiring is
-unchanged and stays a body ``instance`` dimension."""
+The ``messaging`` metric target auto-routes ``southbound_health`` onto the
+reserved ``metric`` class (ecv1/{device}/modbus-adapter/metric/southbound_health) inside the
+metric subsystem — the component just defines the metric and emits measures, so this wiring
+stays a body ``instance`` dimension."""
 from modbus_adapter.health import HealthMetrics
 from modbus_adapter.metrics import ClientMetrics
 
