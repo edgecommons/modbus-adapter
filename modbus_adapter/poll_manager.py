@@ -54,12 +54,14 @@ def coalesce(signals, max_gap):
 
 
 class PollManager:
-    def __init__(self, connection, config, publisher, counters, operational_metrics=None):
+    def __init__(self, connection, config, publisher, counters, operational_metrics=None,
+                 pause_state=None):
         self._conn = connection
         self._config = config
         self._publisher = publisher
         self._counters = counters
         self._operational_metrics = operational_metrics
+        self._pause = pause_state
         self._stop = threading.Event()
         self._threads = []
         self._blocks = {}                 # group.id -> coalesced blocks
@@ -80,6 +82,11 @@ class PollManager:
     def _run_group(self, group):
         interval = group.poll_interval_ms / 1000.0
         while not self._stop.is_set():
+            # sb/pause suspends polling + publishing per instance: skip the poll while paused, but
+            # keep the loop alive so sb/resume takes effect on the next tick.
+            if self._pause is not None and self._pause.is_paused():
+                self._stop.wait(interval)
+                continue
             t0 = time.monotonic()
             try:
                 table_results = self._poll_group(group)
@@ -87,6 +94,8 @@ class PollManager:
                 LOGGER.error("[%s] poll group '%s' failed: %s", self._config.id, group.id, e)
                 table_results = {b["table"]: RESULT_ERROR for b in self._blocks.get(group.id, [])}
             elapsed = time.monotonic() - t0
+            if self._counters is not None:
+                self._counters.set_poll_latency(elapsed * 1000.0)
             if elapsed > interval and self._operational_metrics is not None:
                 for table in {b["table"] for b in self._blocks.get(group.id, [])}:
                     result = table_results.get(table, RESULT_ERROR)
@@ -142,6 +151,9 @@ class PollManager:
                 stats[table]["signalsDecoded"] += 1
                 stats[table]["samplesGood"] += 1
                 self._counters.increment_read()
+                # A successful read refreshes this signal for the staleSignals tracker (§5), whether
+                # or not the value changed enough to publish — a stable value is not a stale one.
+                self._counters.note_signal_update(signal.signal_id(group.unit_id), time.monotonic())
                 key = (group.unit_id, signal.name)
                 if group.publish_mode == ALWAYS or signal.deadband.exceeds(self._last.get(key), value):
                     self._last[key] = value

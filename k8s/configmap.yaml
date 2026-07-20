@@ -25,7 +25,7 @@ data:
             "adapter": "modbus",
             "connection": { "transport": "tcp", "host": "modbus-sim.default.svc.cluster.local", "port": 5020, "unitId": 1, "timeoutMs": 1000 },
             "publish": { "batchMs": 0 },
-            "write": { "enabled": true },
+            "writes": { "allow": [] },
             "pollGroups": [
               { "id": "main", "pollIntervalMs": 1000,
                 "signals": [

@@ -22,14 +22,18 @@ messages, events, logs, or command replies for those details.
 
 ## `southbound_health`
 
-Small compatibility health metric for per-instance connection state and read errors.
+The canonical southbound health metric every adapter emits (SOUTHBOUND.md §5), per instance.
 
 Dimensions: `instance`.
 
 | Measure | Unit | Purpose |
 |---|---:|---|
-| `connectionState` | Count | `1` connected, `0` disconnected. Helps drive simple health alarms. |
-| `readErrors` | Count | Read errors observed during the reporting interval. Helps identify polling failures without inspecting logs. |
+| `connectionState` | Count | `1` connected, `0` disconnected. Drives simple health alarms. |
+| `publishLatencyMs` | Milliseconds | Latency of the most recent northbound `data` publish. Detects a slow local broker or IPC. |
+| `pollLatencyMs` | Milliseconds | Round-trip of the most recent poll cycle. Detects slow slaves or overloaded links. |
+| `readErrors` | Count | Read errors observed during the reporting interval. Identifies polling failures without inspecting logs. |
+| `staleSignals` | Count | Configured signals with no successful read for longer than `component.global.healthThresholds.staleSignalSecs` (default 30). Surfaces silently-stuck signals a flat value cannot reveal. |
+| `reconnects` | Count | Link recoveries observed during the interval. Flags an unstable field network. |
 
 ## `ModbusConnection`
 

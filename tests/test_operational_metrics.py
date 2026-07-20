@@ -159,7 +159,7 @@ def test_inventory_metrics_report_poll_shape_per_group_and_table():
 
 def test_inventory_writable_signals_respects_write_enablement():
     metrics = FakeMetrics()
-    op = ModbusOperationalMetrics(metrics, FakeCM(), make_config(write_enabled=False))
+    op = ModbusOperationalMetrics(metrics, FakeCM(), make_config(writes_allow=[]))
 
     op.emit(False)
 

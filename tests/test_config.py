@@ -87,13 +87,14 @@ def test_server_configuration_precedence():
         "connection": {"transport": "tcp", "host": "10.0.0.5", "port": 1502, "unitId": 3},
         "defaults": {"pollIntervalMs": 250},
         "publish": {"batchMs": 100},
-        "write": {"enabled": True},
+        "writes": {"allow": ["u3/holding/0/float32"]},
         "pollGroups": [{
             "id": "g1", "pollIntervalMs": 500,
             "signals": [{"name": "Temp", "table": "holding", "address": 0, "type": "float32", "scale": 0.1}],
         }],
     }
-    glob = {"defaults": {"pollIntervalMs": 1000, "maxGap": 4, "publishMode": "always"}}
+    glob = {"defaults": {"pollIntervalMs": 1000, "maxGap": 4, "publishMode": "always"},
+            "healthThresholds": {"staleSignalSecs": 45}}
     sc = ServerConfiguration(FakeCM([inst]), glob, "plc1")
 
     assert sc.connection.host == "10.0.0.5" and sc.connection.unit_id == 3
@@ -101,7 +102,9 @@ def test_server_configuration_precedence():
     assert sc.max_gap == 4                    # falls back to global
     assert sc.publish_mode == "always"        # falls back to global
     assert sc.batch_ms == 100
-    assert sc.write_enabled is True
+    assert sc.writes_allow == ["u3/holding/0/float32"]
+    assert sc.permits("u3/holding/0/float32") is True and sc.permits("u3/coil/0/bool") is False
+    assert sc.stale_signal_secs == 45         # from component.global.healthThresholds
 
     g = sc.poll_groups[0]
     assert g.poll_interval_ms == 500          # group override
@@ -111,10 +114,17 @@ def test_server_configuration_precedence():
     assert len(sc.all_signals()) == 1
 
 
-def test_write_disabled_by_default():
+def test_read_only_by_default():
     inst = {"id": "plc9", "pollGroups": []}
     sc = ServerConfiguration(FakeCM([inst]), {}, "plc9")
-    assert sc.write_enabled is False
+    assert sc.writes_allow == [] and sc.permits("anything") is False
+    assert sc.stale_signal_secs == 30        # DEFAULT_STALE_SIGNAL_SECS
+
+
+def test_writes_allow_must_be_a_list():
+    inst = {"id": "plcx", "writes": {"allow": "u1/holding/0/uint16"}, "pollGroups": []}
+    with pytest.raises(ValueError):
+        ServerConfiguration(FakeCM([inst]), {}, "plcx")
 
 
 def test_poll_group_defaults_are_stable_and_publish_mode_is_bounded():

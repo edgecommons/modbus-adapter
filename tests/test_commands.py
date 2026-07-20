@@ -1,20 +1,22 @@
 """Unit tests for the command-inbox verb surface (CommandService) — read / write / status / signals /
-reconnect / repoll — using in-memory fakes (no live broker or PLC)."""
+browse / pause / resume / reconnect / repoll — using in-memory fakes (no live broker or PLC)."""
 import pytest
 
 from edgecommons.command_inbox import CommandException
 
-from modbus_adapter.command_service import CommandService
+from modbus_adapter.command_service import CommandService, panels
+from modbus_adapter.pause import PauseState
 from tests._fakes import FakeConn, FakeEvents, FakePoller, make_config
 
 
-def _svc(conn=None, config=None, poller=None):
+def _svc(conn=None, config=None, poller=None, pause_state=None):
     from modbus_adapter.metrics import ClientMetrics
     conn = conn or FakeConn()
     config = config or make_config()
     events = FakeEvents()
     poller = poller or FakePoller()
-    svc = CommandService(conn, events, config, ClientMetrics(), poller)
+    pause_state = pause_state if pause_state is not None else PauseState()
+    svc = CommandService(conn, events, config, ClientMetrics(), poller, pause_state=pause_state)
     return svc, conn, events, poller
 
 
@@ -66,11 +68,34 @@ def test_write_coil():
     assert res["written"] == 1 and conn.coil[0] is True
 
 
-def test_write_disabled_raises():
-    svc, _, _, _ = _svc(config=make_config(write_enabled=False))
+def test_write_not_allowed_raises():
+    # empty writes.allow => the whole batch is refused before any device I/O -> WRITE_NOT_ALLOWED
+    svc, _, _, _ = _svc(config=make_config(writes_allow=[]))
     with pytest.raises(CommandException) as ei:
         svc.write({"writes": [{"name": "RWInt16", "value": 1}]})
-    assert ei.value.code == "WRITE_DISABLED"
+    assert ei.value.code == "WRITE_NOT_ALLOWED"
+
+
+def test_write_allow_list_refuses_per_entry_before_device_io():
+    # allow only RWInt16: the disallowed RunCmd is refused per-entry (never written), RWInt16 succeeds
+    svc, conn, _, _ = _svc(config=make_config(writes_allow=["u1/holding/10/int16"]))
+    res = svc.write({"writes": [{"name": "RWInt16", "value": 5}, {"name": "RunCmd", "value": True}]})
+    assert res["written"] == 1
+    by_name = {r["signal"]: r for r in res["results"]}
+    assert by_name["RWInt16"]["ok"] is True
+    assert by_name["RunCmd"]["ok"] is False and "writes.allow" in by_name["RunCmd"]["error"]
+    assert conn.coil.get(0) in (False, None)          # the refused coil write never reached the device
+
+
+def test_write_all_failed_raises_write_failed():
+    svc, conn, _, _ = _svc()
+
+    def boom(*a, **k):
+        raise RuntimeError("bus error")
+    conn.write_registers = boom
+    with pytest.raises(CommandException) as ei:
+        svc.write({"writes": [{"name": "RWInt16", "value": 7}]})
+    assert ei.value.code == "WRITE_FAILED"
 
 
 def test_write_readonly_table_reported():
@@ -96,7 +121,64 @@ def test_write_single_body_form():
 def test_status():
     svc, _, _, _ = _svc()
     res = svc.status()
-    assert res["connected"] is True and "read" in res["metrics"] and "write" in res["metrics"]
+    assert res["connected"] is True and res["paused"] is False
+    assert "read" in res["metrics"] and "write" in res["metrics"]
+
+
+def test_pause_resume_idempotent_and_status_reflects_it():
+    pause = PauseState()
+    svc, _, _, _ = _svc(pause_state=pause)
+    p1 = svc.pause()
+    assert p1 == {"id": "plc1", "paused": True, "changed": True}
+    assert svc.pause()["changed"] is False               # idempotent
+    assert svc.status()["paused"] is True and pause.is_paused() is True
+    r1 = svc.resume()
+    assert r1 == {"id": "plc1", "paused": False, "changed": True}
+    assert svc.resume()["changed"] is False              # idempotent
+    assert pause.is_paused() is False
+
+
+def test_repoll_refused_while_paused():
+    svc, _, _, poller = _svc()
+    svc.pause()
+    with pytest.raises(CommandException) as ei:
+        svc.repoll()
+    assert ei.value.code == "BAD_ARGS" and poller.polled == 0
+    svc.resume()
+    assert svc.repoll()["polled"] == 2 and poller.polled == 1
+
+
+def test_browse_pages_configured_inventory():
+    svc, _, _, _ = _svc()
+    # page 1 of 1 (2 signals, default max) -> no cursor
+    res = svc.browse({})
+    ids = [e["id"] for e in res["entries"]]
+    assert ids == ["u1/holding/0/uint16", "u1/holding/10/int16"]
+    assert res["entries"][0]["type"] == "uint16" and "cursor" not in res
+    # paging: max=1 -> a cursor to the next page
+    first = svc.browse({"max": 1})
+    assert len(first["entries"]) == 1 and first["cursor"] == "1"
+    second = svc.browse({"cursor": first["cursor"], "max": 1})
+    assert second["entries"][0]["id"] == "u1/holding/10/int16" and "cursor" not in second
+
+
+def test_browse_bad_cursor():
+    svc, _, _, _ = _svc()
+    with pytest.raises(CommandException) as ei:
+        svc.browse({"cursor": "nope"})
+    assert ei.value.code == "BAD_ARGS"
+
+
+def test_panels_trio():
+    ps = panels()
+    assert [p["id"] for p in ps] == ["overview", "signals", "diagnostics"]
+    assert [p["order"] for p in ps] == [10, 20, 30]
+    assert all(p["scope"] == "instance" for p in ps)
+    # every bound verb is one the adapter actually serves
+    served = {"sb/status", "sb/read", "sb/write", "sb/signals", "sb/browse", "sb/pause",
+              "sb/resume", "reconnect", "repoll"}
+    for p in ps:
+        assert set(p["verbs"]) <= served
 
 
 def test_signals():
@@ -141,15 +223,19 @@ def test_write_bit_not_supported():
     assert res["written"] == 0 and "bit writes" in res["results"][0]["error"]
 
 
-def test_write_encode_failure_reported():
+def test_write_encode_failure_reported_per_entry_in_mixed_batch():
+    # A mixed batch keeps per-entry granularity: the coil write succeeds, the register write fails,
+    # so nothing is raised (not an all-failed batch) and the failure is reported per-entry + audited.
     svc, conn, events, _ = _svc()
 
     def boom(*a, **k):
         raise RuntimeError("bus error")
     conn.write_registers = boom
-    res = svc.write({"writes": [{"name": "RWInt16", "value": 7}]})
-    assert res["results"][0]["ok"] is False and "bus error" in res["results"][0]["error"]
-    assert events.events[0][1] is False
+    res = svc.write({"writes": [{"name": "RunCmd", "value": True}, {"name": "RWInt16", "value": 7}]})
+    by_name = {r["signal"]: r for r in res["results"]}
+    assert by_name["RunCmd"]["ok"] is True
+    assert by_name["RWInt16"]["ok"] is False and "bus error" in by_name["RWInt16"]["error"]
+    assert any(e[0] == "write" and e[1] is False and e[2] == "RWInt16" for e in events.events)
 
 
 def test_read_unresolvable_ref_skipped():

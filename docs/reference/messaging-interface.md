@@ -36,6 +36,9 @@ Request/reply carries `header.reply_to` + `header.correlation_id`; the reply is 
 | `cmd` | `sb/write` | bus → adapter | `ecv1/{device}/modbus-adapter/cmd/sb/write` | `{ok,result}` |
 | `cmd` | `sb/status` | bus → adapter | `ecv1/{device}/modbus-adapter/cmd/sb/status` | `{ok,result}` |
 | `cmd` | `sb/signals` | bus → adapter | `ecv1/{device}/modbus-adapter/cmd/sb/signals` | `{ok,result}` |
+| `cmd` | `sb/browse` | bus → adapter | `ecv1/{device}/modbus-adapter/cmd/sb/browse` | `{ok,result}` |
+| `cmd` | `sb/pause` | bus → adapter | `ecv1/{device}/modbus-adapter/cmd/sb/pause` | `{ok,result}` |
+| `cmd` | `sb/resume` | bus → adapter | `ecv1/{device}/modbus-adapter/cmd/sb/resume` | `{ok,result}` |
 | `cmd` | `reconnect` | bus → adapter | `ecv1/{device}/modbus-adapter/cmd/reconnect` | `{ok,result}` |
 | `cmd` | `repoll` | bus → adapter | `ecv1/{device}/modbus-adapter/cmd/repoll` | `{ok,result}` |
 | `metric` | `southbound_health`, `ModbusConnection`, `ModbusInventory`, `ModbusPoll`, `ModbusPublish`, `ModbusCommand` | adapter → bus (auto) | `ecv1/{device}/modbus-adapter/metric/{metricName}` | — |
@@ -58,8 +61,19 @@ the adapter adds the `sb/*` + `reconnect`/`repoll` verbs below.
 Because the inbox is `main`-only, a multi-instance adapter selects the target device with an
 **`instance`** field in the request body (optional when only one device is configured). The reply body
 is `{"ok": true, "result": <verb result>}` on success, or
-`{"ok": false, "error": {"code", "message"}}` on failure (e.g. `WRITE_DISABLED`, `INSTANCE_NOT_FOUND`,
-`RECONNECT_FAILED`).
+`{"ok": false, "error": {"code", "message"}}` on failure.
+
+### Error codes
+
+The adapter uses the standardized southbound error-code set:
+
+| Code | Meaning |
+|------|---------|
+| `BAD_ARGS` | Malformed request — a missing `instance` on a multi-device adapter, a `repoll` while paused, or a bad `sb/browse` cursor. |
+| `NO_SUCH_INSTANCE` | The `instance` selector names no configured device. |
+| `WRITE_NOT_ALLOWED` | Every entry of an `sb/write` batch is refused by the instance's `writes.allow` list. |
+| `WRITE_FAILED` | Every *attempted* (allow-listed) write in the batch was rejected by the device. |
+| `RECONNECT_FAILED` | A `reconnect` attempt could not re-establish the link. |
 
 ## Sample object
 
@@ -108,7 +122,9 @@ every poll (`always`). One message carries one signal's `samples` (one, or many 
 
 ### `sb/write` (command)
 
-Requires `write.enabled: true` (else the reply is a `WRITE_DISABLED` error). Body:
+Each entry is gated by the instance's **`writes.allow[]`** allow-list — matched on the stable
+`signal.id`, **before any device I/O** (a signal not on the list is refused without touching the
+device). An empty `writes.allow` makes the instance read-only. Body:
 
 ```jsonc
 "body": { "instance": "plc1", "writes": [ { "name": "Setpoint", "value": 42.5 } ] }
@@ -118,9 +134,12 @@ Requires `write.enabled: true` (else the reply is a `WRITE_DISABLED` error). Bod
 A single `{name,value}` object (no `writes` array) is also accepted. A **signal-ref** is either
 `{ "name": "<configured signal>" }` (friendly; uses that signal's table/type/order) or explicit
 `{ "unitId"?, "table", "address", "type", "wordOrder"?, "byteOrder"?, "scale"?, "offset"?, "count"? }`.
-Entries without `value`, an unresolvable ref, a read-only table (`discrete`/`input`), or a `bit` signal
-are reported per-entry as `{"ok": false, "error": …}`. Each write also emits an
-`evt/info/write`/`evt/warning/write` audit event. Writes use FC5/FC15 (coil), FC6/FC16 (holding).
+Entries not on `writes.allow`, without `value`, an unresolvable ref, a read-only table
+(`discrete`/`input`), or a `bit` signal are reported per-entry as `{"ok": false, "error": …}`. When
+**every** entry is an allow-list refusal the reply is a `WRITE_NOT_ALLOWED` error; when every
+*attempted* write is rejected by the device it is a `WRITE_FAILED` error. Each attempted write also
+emits an `evt/info/write`/`evt/warning/write` audit event. Writes use FC5/FC15 (coil), FC6/FC16
+(holding).
 
 ### `sb/read` (command, request/reply)
 
@@ -136,10 +155,13 @@ Unresolvable refs are omitted (match by `signal`). A signal that errors returns 
 
 ## Control plane
 
-- **`sb/status`** → `result = { "id", "connected", "metrics": { "read": {interval,total}, "write": {interval,total} } }`.
-- **`sb/signals`** → `result = { "id", "signals": [ { "name", "unitId", "signalId", "address" }, ... ] }` — the configured/polled signals.
+- **`sb/status`** → `result = { "id", "connected", "paused", "metrics": { "read": {interval,total}, "write": {interval,total} } }`.
+- **`sb/signals`** → `result = { "id", "signals": [ { "name", "unitId", "signalId", "address" }, ... ] }` — the whole configured/polled inventory in one shot.
+- **`sb/browse`** (body `{instance?, cursor?, max?}`) → a **paged** walk of the configured inventory (Modbus has no address-space discovery); `result = { "id", "entries": [ { "id", "name", "type" }, ... ], "cursor"? }`. `cursor` is an opaque offset token, present only while more pages remain. Distinct from `sb/signals` (single-shot, full).
+- **`sb/pause`** (body `{instance}`) → suspends polling/publishing for the instance; confirmed + idempotent; `result = { "id", "paused": true, "changed" }`.
+- **`sb/resume`** (body `{instance}`) → resumes a paused instance; confirmed + idempotent; `result = { "id", "paused": false, "changed" }`.
 - **`reconnect`** (body `{instance}`) → drops and re-establishes the Modbus link (one bounded attempt); `result = { "id", "connected" }` or a `RECONNECT_FAILED` error.
-- **`repoll`** (body `{instance}`) → forces one immediate poll cycle; `result = { "id", "polled": <groups> }`.
+- **`repoll`** (body `{instance}`) → forces one immediate poll cycle; `result = { "id", "polled": <groups> }`. Refused with `BAD_ARGS` while the instance is paused.
 
 ## Events (`evt` class)
 

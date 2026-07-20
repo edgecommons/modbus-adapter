@@ -16,6 +16,7 @@ from .connection import ModbusConnection
 from .events import EventEmitter
 from .health import HealthMetrics
 from .metrics import ClientMetrics, ModbusOperationalMetrics
+from .pause import PauseState
 from .poll_manager import PollManager
 from .publisher import SignalUpdatePublisher
 
@@ -35,7 +36,9 @@ class ModbusDevice:
         self._events = EventEmitter(self._instance.events())
 
         self._counters = ClientMetrics()
-        self._health = HealthMetrics(metrics, config_manager, config.id, self._counters)
+        self._pause = PauseState()
+        self._health = HealthMetrics(metrics, config_manager, config.id, self._counters,
+                                     config.stale_signal_secs)
         self._operational_metrics = ModbusOperationalMetrics(metrics, config_manager, config)
 
         self._connection = ModbusConnection(config, self._operational_metrics)
@@ -45,16 +48,19 @@ class ModbusDevice:
         self._operational_metrics.emit(True)
         self._events.connection(True, {"endpoint": config.connection.describe()})
 
-        self._publisher = SignalUpdatePublisher(self._instance.data(), config, self._operational_metrics)
+        self._publisher = SignalUpdatePublisher(self._instance.data(), config,
+                                                self._operational_metrics, self._counters)
         self._poller = PollManager(
-            self._connection, config, self._publisher, self._counters, self._operational_metrics
+            self._connection, config, self._publisher, self._counters, self._operational_metrics,
+            self._pause,
         )
         self._poller.start()
 
-        # The command surface (read/write/status/signals/reconnect/repoll). No subscription here —
-        # main.py registers the verbs on gg.get_commands() and dispatches into this object.
+        # The command surface (read/write/status/signals/browse/pause/resume/reconnect/repoll). No
+        # subscription here — main.py registers the verbs on gg.get_commands() and dispatches here.
         self.commands = CommandService(self._connection, self._events, config,
-                                       self._counters, self._poller, self._operational_metrics)
+                                       self._counters, self._poller, self._operational_metrics,
+                                       self._pause)
 
         self._stop = threading.Event()
         tick = (config.batch_ms / 1000.0) if config.batch_ms > 0 else 5.0
@@ -65,11 +71,14 @@ class ModbusDevice:
 
     def _tick_loop(self, tick):
         while not self._stop.wait(tick):
-            self._publisher.flush()
+            if not self._pause.is_paused():          # sb/pause suspends polling + publishing
+                self._publisher.flush()
             connected = self._connection.is_connected()
             self._health.emit(connected)
             self._operational_metrics.emit(connected)
             if connected != self._connected:
+                if connected and not self._connected:   # a recovery — count it for southbound_health
+                    self._counters.increment_reconnect()
                 self._connected = connected
                 self._events.connection(connected, {"endpoint": self.config.connection.describe()})
 
@@ -83,6 +92,10 @@ class ModbusDevice:
         """Whether this device's Modbus slave connection is currently up — the per-instance
         connectivity reported in the main state keepalive's instances[] (#1c)."""
         return self._connection.is_connected()
+
+    def is_paused(self) -> bool:
+        """Whether this device is paused (``sb/pause``) — polling and publishing are suspended."""
+        return self._pause.is_paused()
 
     @property
     def endpoint(self) -> str:

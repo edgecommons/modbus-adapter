@@ -63,7 +63,8 @@ Both go through the library **command inbox** (`ecv1/{device}/modbus-adapter/cmd
 device with `instance` in the body (optional with one device). The reply is
 `{ "ok": true, "result": … }`.
 
-**Write** (needs `write.enabled: true`):
+**Write** (the target `signal.id` must be on the instance's `writes.allow` list — e.g.
+`"writes": { "allow": [ "u1/holding/6/float32" ] }`):
 ```
 publish   ecv1/<device>/modbus-adapter/cmd/sb/write
           { "header": { "name": "sb/write", "reply_to": "app/r", "correlation_id": "7" },

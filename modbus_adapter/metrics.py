@@ -18,10 +18,17 @@ MODBUS_COMMAND = "ModbusCommand"
 RESULT_SUCCESS = "success"
 RESULT_ERROR = "error"
 
-COMMAND_VERBS = ("sb/read", "sb/write", "sb/status", "sb/signals", "reconnect", "repoll")
+COMMAND_VERBS = (
+    "sb/read", "sb/write", "sb/status", "sb/signals", "sb/browse", "sb/pause", "sb/resume",
+    "reconnect", "repoll",
+)
 
 
 class ClientMetrics:
+    """Per-instance counters + the live-value trackers that feed the canonical ``southbound_health``
+    metric (SOUTHBOUND.md §5): read/write totals, read errors, the last observed poll/publish
+    latency, the reconnect count, and a per-signal last-update tracker for ``staleSignals``."""
+
     def __init__(self):
         self._lock = threading.Lock()
         self._read_interval = 0
@@ -29,6 +36,10 @@ class ClientMetrics:
         self._write_interval = 0
         self._write_total = 0
         self._read_errors_interval = 0
+        self._reconnects_interval = 0
+        self._last_poll_latency_ms = 0.0
+        self._last_publish_latency_ms = 0.0
+        self._last_update = {}                 # signal_id -> monotonic timestamp of its last update
 
     def increment_read(self, n=1):
         with self._lock:
@@ -49,6 +60,42 @@ class ClientMetrics:
             v = self._read_errors_interval
             self._read_errors_interval = 0
             return v
+
+    def increment_reconnect(self, n=1):
+        with self._lock:
+            self._reconnects_interval += n
+
+    def take_interval_reconnects(self) -> int:
+        with self._lock:
+            v = self._reconnects_interval
+            self._reconnects_interval = 0
+            return v
+
+    def set_poll_latency(self, ms):
+        with self._lock:
+            self._last_poll_latency_ms = float(ms)
+
+    def poll_latency_ms(self) -> float:
+        with self._lock:
+            return self._last_poll_latency_ms
+
+    def set_publish_latency(self, ms):
+        with self._lock:
+            self._last_publish_latency_ms = float(ms)
+
+    def publish_latency_ms(self) -> float:
+        with self._lock:
+            return self._last_publish_latency_ms
+
+    def note_signal_update(self, signal_id, now):
+        """Record that ``signal_id`` just updated — feeds the ``staleSignals`` tracker."""
+        with self._lock:
+            self._last_update[signal_id] = now
+
+    def stale_count(self, now, stale_after) -> int:
+        """Signals whose last update is older than ``stale_after`` seconds (``staleSignals``)."""
+        with self._lock:
+            return sum(1 for t in self._last_update.values() if now - t > stale_after)
 
     def to_dict(self) -> dict:
         with self._lock:
@@ -294,9 +341,10 @@ class ModbusOperationalMetrics:
                 "readBlocks": read_blocks,
                 "configuredPollIntervalMs": group.poll_interval_ms,
                 "coalescingRatio": (configured / read_blocks) if read_blocks else 0.0,
-                "writableSignals": (
-                    sum(1 for s in signals if s.table in codec.WRITABLE_TABLES)
-                    if self._config.write_enabled else 0
+                "writableSignals": sum(
+                    1 for s in signals
+                    if s.table in codec.WRITABLE_TABLES
+                    and self._config.permits(s.signal_id(group.unit_id))
                 ),
             }
             self._emit(self._metric(MODBUS_INVENTORY, dims), values)

@@ -34,10 +34,11 @@ LOGGER = logging.getLogger("modbus_adapter.publisher")
 
 
 class SignalUpdatePublisher:
-    def __init__(self, data_facade, config, operational_metrics=None):
+    def __init__(self, data_facade, config, operational_metrics=None, counters=None):
         self._data = data_facade              # this instance's DataFacade (gg.instance(id).data())
         self._config = config                 # ServerConfiguration
         self._operational_metrics = operational_metrics
+        self._counters = counters             # ClientMetrics (feeds southbound_health.publishLatencyMs)
         self._lock = threading.Lock()
         self._pending = {}                    # (unit_id, name) -> [group, signal, [Sample, ...]]
 
@@ -108,6 +109,9 @@ class SignalUpdatePublisher:
                     batchSize=len(samples),
                     publishLatencyMs=elapsed_ms,
                 )
+                # Surface the latency on the canonical southbound_health metric too (§5).
+                if self._counters is not None:
+                    self._counters.set_publish_latency(elapsed_ms)
 
     def _publish_valueless(self, group, signal, samples: List[Sample]) -> None:
         """A fully failed block read carries **no value at all** for its signals -- the module

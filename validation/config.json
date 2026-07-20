@@ -46,8 +46,20 @@
         "publish": {
           "batchMs": 0
         },
-        "write": {
-          "enabled": true
+        "writes": {
+          "allow": [
+            "u1/holding/10/int16",
+            "u1/holding/11/uint16",
+            "u1/holding/12/int32",
+            "u1/holding/14/uint32",
+            "u1/holding/16/int64",
+            "u1/holding/20/uint64",
+            "u1/holding/24/float32",
+            "u1/holding/26/float64",
+            "u1/holding/30/string",
+            "u1/holding/50/float32",
+            "u1/coil/0/bool"
+          ]
         },
         "pollGroups": [
           {
