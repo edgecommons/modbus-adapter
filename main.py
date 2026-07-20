@@ -20,6 +20,7 @@ from edgecommons import EdgeCommonsBuilder
 from edgecommons.command_inbox import CommandException
 from edgecommons.heartbeat.instance_connectivity import InstanceConnectivity
 
+from modbus_adapter.command_service import panels
 from modbus_adapter.config.server_configuration import ServerConfiguration
 from modbus_adapter.device import ModbusDevice
 
@@ -54,11 +55,11 @@ def main():
         if inst is None:
             if len(devices) == 1:
                 return next(iter(devices.values()))
-            raise CommandException("INSTANCE_REQUIRED",
+            raise CommandException("BAD_ARGS",
                                    f"body must specify 'instance' (configured: {sorted(devices)})")
         device = devices.get(inst)
         if device is None:
-            raise CommandException("INSTANCE_NOT_FOUND",
+            raise CommandException("NO_SUCH_INSTANCE",
                                    f"no ready device instance '{inst}' (ready: {sorted(devices)})")
         return device
 
@@ -71,8 +72,14 @@ def main():
         commands.register("sb/write", lambda req: resolve_device(_body(req)).commands.write(_body(req)))
         commands.register("sb/status", lambda req: resolve_device(_body(req)).commands.status())
         commands.register("sb/signals", lambda req: resolve_device(_body(req)).commands.signals())
+        commands.register("sb/browse", lambda req: resolve_device(_body(req)).commands.browse(_body(req)))
+        commands.register("sb/pause", lambda req: resolve_device(_body(req)).commands.pause())
+        commands.register("sb/resume", lambda req: resolve_device(_body(req)).commands.resume())
         commands.register("reconnect", lambda req: resolve_device(_body(req)).commands.reconnect())
         commands.register("repoll", lambda req: resolve_device(_body(req)).commands.repoll())
+        # The edge-console panel trio (overview/signals/diagnostics) for the descriptor surface.
+        for panel in panels():
+            commands.register_panel(panel)
         logger.info("Command verbs registered: %s", sorted(commands.verbs()))
     else:
         logger.warning("No command inbox (unresolved identity) — command surface disabled")

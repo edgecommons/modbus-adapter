@@ -45,8 +45,8 @@
         "publish": {
           "batchMs": 0
         },
-        "write": {
-          "enabled": true
+        "writes": {
+          "allow": []
         },
         "pollGroups": [
           {
@@ -82,8 +82,8 @@
         "publish": {
           "batchMs": 0
         },
-        "write": {
-          "enabled": true
+        "writes": {
+          "allow": []
         },
         "pollGroups": [
           {

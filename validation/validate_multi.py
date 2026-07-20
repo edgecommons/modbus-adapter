@@ -109,7 +109,7 @@ def main():
         # unknown instance -> coded error
         rbad = request(c, cmd_base, "sb/read", {"instance": "plc9", "signals": [{"name": "Counter16"}]})
         check("unknown instance errors", rbad is not None and rbad.get("body", {}).get("ok") is False
-              and rbad["body"]["error"]["code"] == "INSTANCE_NOT_FOUND", f"{(rbad or {}).get('body')}")
+              and rbad["body"]["error"]["code"] == "NO_SUCH_INSTANCE", f"{(rbad or {}).get('body')}")
     else:
         check("component derivable", False)
 

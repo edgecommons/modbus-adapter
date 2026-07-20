@@ -40,6 +40,12 @@ dimensions; they stay in data, events, logs, or command replies.
 | `batchMs` | number | `0` | If `>0`, buffer a signal's samples and publish one message per `batchMs`; `0` = publish each immediately. |
 | `maxGap` | number | `0` | Max address gap the poller will bridge when coalescing signals into one Modbus read. |
 
+## `component.global.healthThresholds`
+
+| Key | Type | Default | Definition |
+|-----|------|---------|-----------|
+| `staleSignalSecs` | number | `30` | A configured signal with no successful read for longer than this counts toward `southbound_health.staleSignals`. |
+
 ## `component.instances[]`
 
 | Key | Type | Definition |
@@ -48,7 +54,7 @@ dimensions; they stay in data, events, logs, or command replies.
 | `connection` | object | Transport + endpoint (below). |
 | `defaults` | object | Per-instance overrides of `global.defaults`. |
 | `publish` | object | `batchMs` (buffer window). |
-| `write` | object | `enabled` (default `false`) — whether the `sb/write` verb accepts writes for this instance. |
+| `writes` | object | `allow` — an array of stable `signal.id`s (e.g. `u1/holding/40/uint16`) this instance may write. Checked before any device I/O; anything not listed is refused. Empty (the default) ⇒ read-only. |
 | `pollGroups` | array | Groups of signals polled together (below). |
 
 ### `connection`
@@ -117,13 +123,16 @@ first level (site) after `ecv1`.
   "messaging": { "local": { "type": "mqtt", "host": "localhost", "port": 1883 } },
   "metricEmission": { "target": "messaging" },
   "component": {
-    "global": { "defaults": { "pollIntervalMs": 1000, "publishMode": "onChange", "maxGap": 8 } },
+    "global": {
+      "defaults": { "pollIntervalMs": 1000, "publishMode": "onChange", "maxGap": 8 },
+      "healthThresholds": { "staleSignalSecs": 30 }
+    },
     "instances": [
       {
         "id": "plc1",
         "connection": { "transport": "tcp", "host": "10.0.0.50", "port": 502, "unitId": 1 },
         "publish": { "batchMs": 0 },
-        "write":   { "enabled": true },
+        "writes":  { "allow": [ "u1/holding/2/float32", "u1/coil/0/bool" ] },
         "pollGroups": [
           { "id": "fast", "pollIntervalMs": 500,
             "signals": [

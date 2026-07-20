@@ -46,7 +46,9 @@ ComponentConfiguration:
             # Data updates publish on the UNS data class (ecv1/{device}/modbus-adapter/plc1/data/{signal});
             # on-demand read/write/control ride the command inbox (cmd class). No topic templates.
             publish: { batchMs: 0 }
-            write: { enabled: true }
+            # Writes are allow-listed by stable signal.id (SOUTHBOUND.md §2.2 / D-U16). Empty =>
+            # read-only; add e.g. "u1/holding/40/uint16" to permit sb/write to that signal.
+            writes: { allow: [] }
             pollGroups:
               - id: "main"
                 pollIntervalMs: 1000
@@ -74,7 +76,7 @@ Manifests:
   - Platform:
       os: all
     Artifacts:
-      - URI: "s3://BUCKET_NAME/COMPONENT_NAME/COMPONENT_VERSION/ModbusAdapter.zip"
+      - URI: "s3://BUCKET_NAME/COMPONENT_NAME/COMPONENT_VERSION/modbus-adapter.zip"
         Unarchive: ZIP
     Lifecycle:
       # Installs into a venv under the (ggc_user-owned) work dir — no elevated privilege needed.
@@ -85,14 +87,13 @@ Manifests:
           python3 -m venv "$COMPONENT_DIR/venv"
           . $COMPONENT_DIR/venv/bin/activate
           pip3 install --upgrade pip
-          # Install the bundled edgecommons wheel first (it is not on public PyPI), then the rest;
-          # edgecommons in requirements.txt is then already satisfied and skipped.
-          pip3 install {artifacts:decompressedPath}/ModbusAdapter/greengrass_commons-*.whl
-          pip3 install -r {artifacts:decompressedPath}/ModbusAdapter/requirements.txt
+          # requirements.txt carries the edgecommons dependency itself (a git pin — it is not on
+          # public PyPI), so a single install resolves the library plus pymodbus.
+          pip3 install -r {artifacts:decompressedPath}/modbus-adapter/requirements.txt
           deactivate
       Run:
         Script: |-
           set -e
           COMPONENT_DIR="{work:path}"
           . $COMPONENT_DIR/venv/bin/activate
-          python3 -u {artifacts:decompressedPath}/ModbusAdapter/main.py --platform GREENGRASS
+          python3 -u {artifacts:decompressedPath}/modbus-adapter/main.py --platform GREENGRASS

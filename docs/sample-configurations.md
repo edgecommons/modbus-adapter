@@ -194,7 +194,7 @@ A single 16-bit register packs six status flags. Each is surfaced as its own boo
         "id": "skid1",
         "connection": { "transport": "tcp", "host": "10.0.0.50", "port": 502, "unitId": 1, "timeoutMs": 1000 },
         "publish": { "batchMs": 0 },
-        "write":   { "enabled": true },
+        "writes":  { "allow": [ "u1/holding/6/float32", "u1/holding/8/uint16", "u1/coil/0/bool", "u1/coil/1/bool", "u1/coil/2/bool" ] },
         "pollGroups": [
 
           { "id": "process", "pollIntervalMs": 250, "unitId": 1, "publishMode": "onChange", "maxGap": 8,
@@ -354,7 +354,7 @@ transitions as discrete events (not just polled `data`), consume the adapter's s
 | `connection.unitId` | Default unit id for the instance; overridden here per-group (`totals` → unit 2). |
 | `connection.timeoutMs` | Per-request response timeout (default `1000`). A read that exceeds it marks that block's signals `BAD` and increments `readErrors`. |
 | `publish.batchMs` | `0` = publish each sample immediately; `>0` buffers per signal and flushes together (see [batching](#batching-batchms)). Set under `publish` or `defaults`; **not** per poll group. |
-| `write.enabled` | `true` lets the `sb/write` command verb write to this device. `false` (default) → `sb/write` replies with a `WRITE_DISABLED` error. |
+| `writes.allow` | Array of stable `signal.id`s the `sb/write` verb may write, checked before any device I/O. Anything not listed is refused; a wholly-refused batch replies with a `WRITE_NOT_ALLOWED` error. Empty (the default) → the device is read-only. |
 | `hierarchy` / `identity` | Place the device in the UNS enterprise tree (envelope `identity`); the last hierarchy level is the resolved thing name = the topic `{device}`. |
 | `pollGroups[].pollIntervalMs` | One full read-decode-publish pass for the group. The loop subtracts its own work time, so a slow read shortens (never lengthens) the next sleep — the configured cadence is the ceiling. |
 | `pollGroups[].unitId` | Overrides `connection.unitId` for this group — addresses multiple slaves behind one TCP/RTU-TCP gateway or RTU line from one instance. |
@@ -597,7 +597,7 @@ data:
             "id": "plc1",
             "connection": { "transport": "tcp", "host": "modbus-sim.default.svc.cluster.local", "port": 5020, "unitId": 1, "timeoutMs": 1000 },
             "publish": { "batchMs": 0 },
-            "write":   { "enabled": true },
+            "writes":  { "allow": [] },
             "pollGroups": [
               { "id": "main", "pollIntervalMs": 1000,
                 "signals": [
@@ -697,16 +697,19 @@ Polling is the read **plane**. The command surface is separate — served by the
 (`ecv1/{device}/modbus-adapter/cmd/{verb}`), with the target device selected by an `instance` field
 in the request body. Every reply is `{ "ok": true, "result": … }` or `{ "ok": false, "error": … }`.
 
-- **Writes** (`sb/write`) require `write.enabled: true` (otherwise a `WRITE_DISABLED` error).
+- **Writes** (`sb/write`) accept a signal only when its stable `signal.id` is on the instance's
+  `writes.allow` list, checked before any device I/O; a wholly-refused batch replies `WRITE_NOT_ALLOWED`.
   `{ "writes": [ { "name": "Setpoint", "value": 42.5 } ] }` (or a single `{ "name": …, "value": … }`).
   Only **writable tables** accept writes — `coil` (FC5/FC15) and `holding` (FC6/FC16); `discrete`/`input`
   and `bit` (single-bit) writes are reported per-entry as `ok:false`. `scale`/`offset` are inverted on
-  the way down. Each write also emits an `evt/info/write` (success) or `evt/warning/write` (failure)
-  audit event.
+  the way down. Each attempted write also emits an `evt/info/write` (success) or `evt/warning/write`
+  (failure) audit event.
 - **Reads** (`sb/read`) are request/reply and return `{ id, reads: [...] }` — on-demand, independent of
   the poll loop.
-- **Control** verbs `sb/status` / `sb/signals` return connection state + counters and the resolved
-  signal list; `reconnect` re-establishes the link and `repoll` forces an immediate poll.
+- **Control** verbs `sb/status` / `sb/signals` return connection state (incl. `paused`) + counters and
+  the full signal list; `sb/browse` pages that inventory; `sb/pause` / `sb/resume` suspend and resume
+  the instance; `reconnect` re-establishes the link and `repoll` forces an immediate poll (refused
+  while paused).
 
 A signal-ref in any command is either `{ "name": "<configured signal>" }` or an explicit
 `{ unitId?, table, address, type, wordOrder?, scale?, … }` for arbitrary access. See

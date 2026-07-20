@@ -1,5 +1,5 @@
-"""The on-demand command surface for one device instance: batch write, batch read, and the
-status / signals / reconnect / repoll control queries.
+"""The on-demand command surface for one device instance: batch write, batch read, browse, and the
+status / signals / pause / resume / reconnect / repoll control verbs.
 
 These are served through the library-owned **command inbox** (the
 ``gg.get_commands()`` facade) rather than per-instance topics: ``main.py`` registers the verbs
@@ -24,19 +24,52 @@ from .metrics import RESULT_ERROR, RESULT_SUCCESS
 
 LOGGER = logging.getLogger("modbus_adapter.command")
 
+#: Default page size for ``sb/browse``.
+BROWSE_DEFAULT_MAX = 200
+#: Hard cap on an ``sb/browse`` page.
+BROWSE_MAX = 1000
+
 
 def _now_iso():
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def panels():
+    """The three edge-console panel descriptors (SOUTHBOUND.md §6), each ``scope: "instance"`` with
+    ``order`` 10/20/30, bound to the verbs this adapter serves. Core validates ``id``/``title``/
+    uniqueness; the widget kinds and bound verbs are console-interpreted, so they ride verbatim."""
+    return [
+        {
+            "id": "overview", "title": "Overview", "order": 10, "scope": "instance",
+            "widgets": [
+                {"kind": "summary", "fields": ["connected", "paused", "endpoint"]},
+                {"kind": "commandSummary", "actions": ["reconnect", "sb/pause", "sb/resume"]},
+            ],
+            "verbs": ["sb/status", "reconnect", "sb/pause", "sb/resume"],
+        },
+        {
+            "id": "signals", "title": "Signals", "order": 20, "scope": "instance",
+            "widgets": [{"kind": "signalGrid"}],
+            "verbs": ["sb/signals", "sb/read", "sb/write", "repoll"],
+        },
+        {
+            "id": "diagnostics", "title": "Diagnostics", "order": 30, "scope": "instance",
+            "widgets": [{"kind": "treeBrowser"}, {"kind": "keyValueList"}],
+            "verbs": ["sb/browse", "sb/status"],
+        },
+    ]
+
+
 class CommandService:
-    def __init__(self, connection, events, config, counters, poller, operational_metrics=None):
+    def __init__(self, connection, events, config, counters, poller, operational_metrics=None,
+                 pause_state=None):
         self._conn = connection
         self._events = events                # EventEmitter (evt/write audit records)
         self._config = config
         self._counters = counters
         self._poller = poller
         self._operational_metrics = operational_metrics
+        self._pause = pause_state
         self._by_name = {s.name: (g, s) for (g, s) in config.all_signals()}
 
     # --- resolution -------------------------------------------------------------------------
@@ -90,25 +123,37 @@ class CommandService:
 
     def write(self, body):
         """``sb/write`` — batch write (mutating). Body ``{instance?, writes:[{name|table+address, value}]}``.
-        Gated on ``write.enabled``; each entry is audited on ``evt/write``."""
+
+        Every entry is gated by the instance's ``writes.allow[]`` allow-list — matched on the stable
+        ``signal.id``, **before any device I/O** (SOUTHBOUND.md §2.2 / D-U16): a signal not on the
+        list is refused without ever touching the device. Standardized error codes: an all-refused
+        batch raises ``WRITE_NOT_ALLOWED``; an all-failed batch of allowed writes raises
+        ``WRITE_FAILED``. Each attempted write is audited on ``evt/write``."""
         t0 = time.monotonic()
         result = RESULT_ERROR
         writes = body.get("writes") if "writes" in body else ([body] if body else [])
         results = []
+        refused = 0
+        attempted = 0
+        succeeded = 0
         try:
-            if not self._config.write_enabled:
-                raise CommandException("WRITE_DISABLED",
-                                       f"writes are disabled for instance '{self._config.id}' "
-                                       "(set write.enabled: true in its config)")
             for w in writes:
-                name = (w or {}).get("name")
-                if "value" not in w:
-                    results.append({"signal": name, "ok": False, "error": "missing 'value'"})
-                    continue
+                w = w or {}
+                name = w.get("name")
                 try:
                     signal, unit = self._resolve(w)
                 except ValueError as e:
                     results.append({"signal": name, "ok": False, "error": str(e)})
+                    continue
+                # THE ALLOW-LIST — checked here, on the stable signal.id, BEFORE any device I/O.
+                signal_id = signal.signal_id(unit)
+                if not self._config.permits(signal_id):
+                    refused += 1
+                    results.append({"signal": signal.name, "ok": False,
+                                    "error": f"'{signal_id}' is not in this instance's writes.allow"})
+                    continue
+                if "value" not in w:
+                    results.append({"signal": signal.name, "ok": False, "error": "missing 'value'"})
                     continue
                 if signal.table not in codec.WRITABLE_TABLES:
                     results.append({"signal": signal.name, "ok": False,
@@ -118,12 +163,22 @@ class CommandService:
                     results.append({"signal": signal.name, "ok": False,
                                     "error": "bit writes (read-modify-write) not supported"})
                     continue
+                attempted += 1
                 ok, error = self._write_one(signal, unit, w["value"])
+                if ok:
+                    succeeded += 1
                 results.append({"signal": signal.name, "value": w["value"], "ok": ok,
                                 **({"error": error} if error else {})})
                 self._events.write(ok, signal.name, w["value"], error)
+            # WRITE_NOT_ALLOWED only when EVERY entry was an allow-list refusal (nothing else tried).
+            if writes and refused == len(writes):
+                raise CommandException("WRITE_NOT_ALLOWED",
+                                       "no entry is in this instance's writes.allow list")
+            # WRITE_FAILED when every allowed write reached the device and every one failed.
+            if attempted > 0 and succeeded == 0:
+                raise CommandException("WRITE_FAILED", "every attempted write was rejected by the device")
             result = RESULT_SUCCESS
-            return {"id": self._config.id, "written": sum(1 for r in results if r["ok"]), "results": results}
+            return {"id": self._config.id, "written": succeeded, "results": results}
         finally:
             self._record_command(
                 "sb/write",
@@ -149,16 +204,76 @@ class CommandService:
             return False, (str(e) or "write error")
 
     def status(self):
-        """``sb/status`` — connection state + read/write counters."""
+        """``sb/status`` — connection state, paused flag, and read/write counters."""
         t0 = time.monotonic()
         result = RESULT_ERROR
         try:
             ret = {"id": self._config.id, "connected": self._conn.is_connected(),
-                   "metrics": self._counters.to_dict()}
+                   "paused": self.is_paused(), "metrics": self._counters.to_dict()}
             result = RESULT_SUCCESS
             return ret
         finally:
             self._record_command("sb/status", result, t0)
+
+    def is_paused(self) -> bool:
+        return self._pause is not None and self._pause.is_paused()
+
+    def pause(self):
+        """``sb/pause`` — suspend polling/publishing for this instance. Confirmed + idempotent:
+        the reply is ``{paused: true, changed}``, ``changed`` false when already paused."""
+        t0 = time.monotonic()
+        result = RESULT_ERROR
+        try:
+            changed = self._pause.set(True) if self._pause is not None else False
+            result = RESULT_SUCCESS
+            return {"id": self._config.id, "paused": True, "changed": changed}
+        finally:
+            self._record_command("sb/pause", result, t0)
+
+    def resume(self):
+        """``sb/resume`` — resume a paused instance. Confirmed + idempotent: the reply is
+        ``{paused: false, changed}``, ``changed`` false when already running."""
+        t0 = time.monotonic()
+        result = RESULT_ERROR
+        try:
+            changed = self._pause.set(False) if self._pause is not None else False
+            result = RESULT_SUCCESS
+            return {"id": self._config.id, "paused": False, "changed": changed}
+        finally:
+            self._record_command("sb/resume", result, t0)
+
+    def browse(self, body):
+        """``sb/browse`` — a **paged** walk of the configured signal inventory. Modbus has no
+        address-space discovery (signals are declared explicitly), so browse pages the configured
+        inventory: body ``{instance?, cursor?, max?}`` → ``{id, entries:[{id, name, type}], cursor?}``.
+        ``cursor`` is an opaque offset token; it is present in the reply only while more pages
+        remain. Distinct from ``sb/signals``, which returns the whole inventory in one shot."""
+        t0 = time.monotonic()
+        result = RESULT_ERROR
+        try:
+            signals = self._poller.resolved_signals()
+            cursor = body.get("cursor")
+            try:
+                start = int(cursor) if cursor is not None else 0
+            except (TypeError, ValueError):
+                raise CommandException("BAD_ARGS", f"invalid cursor {cursor!r} (expected an offset token)")
+            if start < 0:
+                raise CommandException("BAD_ARGS", f"invalid cursor {cursor!r} (must be >= 0)")
+            requested = body.get("max")
+            max_entries = int(requested) if isinstance(requested, int) and not isinstance(requested, bool) \
+                else BROWSE_DEFAULT_MAX
+            max_entries = max(1, min(BROWSE_MAX, max_entries))
+            page = signals[start:start + max_entries]
+            entries = [{"id": s["signalId"], "name": s["name"],
+                        "type": (s.get("address") or {}).get("type")} for s in page]
+            out = {"id": self._config.id, "entries": entries}
+            nxt = start + max_entries
+            if nxt < len(signals):
+                out["cursor"] = str(nxt)
+            result = RESULT_SUCCESS
+            return out
+        finally:
+            self._record_command("sb/browse", result, t0)
 
     def signals(self):
         """``sb/signals`` — the configured/polled point list (so the console needs no static config)."""
@@ -187,10 +302,13 @@ class CommandService:
             self._record_command("reconnect", result, t0, reconnectRequests=1)
 
     def repoll(self):
-        """``repoll`` — force an immediate poll cycle now instead of waiting for the interval."""
+        """``repoll`` — force an immediate poll cycle now instead of waiting for the interval.
+        Refused while the instance is paused (``BAD_ARGS``) — a paused instance publishes nothing."""
         t0 = time.monotonic()
         result = RESULT_ERROR
         try:
+            if self.is_paused():
+                raise CommandException("BAD_ARGS", "instance is paused — resume before repolling")
             published = self._poller.poll_once()
             result = RESULT_SUCCESS
             return {"id": self._config.id, "polled": published}

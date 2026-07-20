@@ -123,7 +123,12 @@ class FakePoller:
         self.polled = 0
 
     def resolved_signals(self):
-        return [{"name": "Counter16", "unitId": 1}]
+        return [
+            {"name": "Counter16", "unitId": 1, "signalId": "u1/holding/0/uint16",
+             "address": {"unitId": 1, "table": "holding", "address": 0, "type": "uint16"}},
+            {"name": "RWInt16", "unitId": 1, "signalId": "u1/holding/10/int16",
+             "address": {"unitId": 1, "table": "holding", "address": 10, "type": "int16"}},
+        ]
 
     def poll_once(self):
         self.polled += 1
@@ -138,19 +143,26 @@ class _CM:
         return self._inst if self._inst.get("id") == iid else {}
 
 
-def make_config(signals=None, write_enabled=True, batch_ms=0, instance_id="plc1"):
-    """Build a real ServerConfiguration around the given signals."""
+def make_config(signals=None, writes_allow=None, batch_ms=0, instance_id="plc1", global_config=None):
+    """Build a real ServerConfiguration around the given signals.
+
+    ``writes_allow`` is the ``writes.allow[]`` list (stable signal.ids); ``None`` (the default) allows
+    **every** configured signal so the write-path tests reach the device, and ``[]`` makes the
+    instance read-only. ``global_config`` supplies ``component.global`` (e.g. ``healthThresholds``)."""
     signals = signals if signals is not None else [
         {"name": "Counter16", "table": "holding", "address": 0, "type": "uint16"},
         {"name": "RWInt16", "table": "holding", "address": 10, "type": "int16"},
         {"name": "RunCmd", "table": "coil", "address": 0, "type": "bool"},
         {"name": "InCounter", "table": "input", "address": 5, "type": "uint16"},
     ]
+    if writes_allow is None:
+        from modbus_adapter.config.signal_spec import SignalSpec
+        writes_allow = [SignalSpec.from_dict(s).signal_id(1) for s in signals]
     inst = {
         "id": instance_id,
         "connection": {"transport": "tcp", "host": "127.0.0.1", "port": 5020, "unitId": 1},
         "publish": {"batchMs": batch_ms},
-        "write": {"enabled": write_enabled},
+        "writes": {"allow": writes_allow},
         "pollGroups": [{"id": "g", "pollIntervalMs": 500, "unitId": 1, "signals": signals}],
     }
-    return ServerConfiguration(_CM(inst), {}, instance_id)
+    return ServerConfiguration(_CM(inst), global_config or {}, instance_id)

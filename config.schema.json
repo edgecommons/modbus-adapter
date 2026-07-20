@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.edgecommons.mbreissi.com/schemas/modbus-adapter/config.schema.json",
+  "title": "modbus-adapter southbound adapter configuration",
+  "description": "The configuration the Modbus adapter itself understands: the object at `component.global`, with each entry of `component.instances[]` validated against `#/$defs/device`. A southbound adapter models ONE DEVICE PER INSTANCE — how to reach it, how often to poll it, what to decode, and what it is permitted to write. See docs/SOUTHBOUND.md §2.1.1 for the Modbus mapping. The library envelope (logging, messaging, metricEmission, heartbeat, hierarchy, identity, topic, tags, and `component.token`) is owned by the canonical schema (schema/edgecommons-config-schema.json) and is deliberately NOT redeclared here.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "defaults": { "$ref": "#/$defs/defaults" },
+    "healthThresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Thresholds feeding the `southbound_health` metric (SOUTHBOUND.md §5).",
+      "properties": {
+        "staleSignalSecs": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 30,
+          "description": "A signal with no successful read for longer than this counts toward `southbound_health.staleSignals`. A signal that silently stops updating is otherwise indistinguishable from one that is simply not changing — which is why staleness is measured rather than assumed."
+        }
+      }
+    }
+  },
+  "$defs": {
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Timing/publish defaults resolved signal/group ▸ instance ▸ global ▸ built-in.",
+      "properties": {
+        "pollIntervalMs": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1000,
+          "description": "Milliseconds between reads of a poll group."
+        },
+        "publishMode": {
+          "type": "string",
+          "enum": ["onChange", "always"],
+          "default": "onChange",
+          "description": "`onChange` publishes when a value changes past its deadband; `always` publishes every poll. Any other value is treated as `onChange`."
+        },
+        "batchMs": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "If > 0, buffer a signal's samples and publish one message per `batchMs`; 0 publishes each immediately."
+        },
+        "maxGap": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Max address gap the poller bridges when coalescing signals into one Modbus read."
+        }
+      }
+    },
+    "device": {
+      "title": "One Modbus device (instance)",
+      "description": "One entry of `component.instances[]`: a single Modbus slave / gateway. Each device runs on its own worker thread and publishes to its own UNS data topics (ecv1/{device}/modbus-adapter/{instance}/data/{signal}).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "connection"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "description": "Unique device id. It is the `{instance}` token of this device's UNS topics and the `instance` dimension of its metrics, so it must be a valid UNS token (lower-kebab) and stable."
+        },
+        "adapter": {
+          "type": "string",
+          "default": "modbus",
+          "description": "The protocol backend, published in `device.adapter` of every SouthboundSignalUpdate. Always `modbus` for this adapter."
+        },
+        "connection": { "$ref": "#/$defs/connection" },
+        "defaults": { "$ref": "#/$defs/defaults" },
+        "publish": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Per-instance publish behavior.",
+          "properties": {
+            "batchMs": { "type": "integer", "minimum": 0, "description": "Buffer window; 0 publishes each sample immediately." }
+          }
+        },
+        "writes": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "The write allow-list (SOUTHBOUND.md §2.2 / D-U16).",
+          "properties": {
+            "allow": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "default": [],
+              "description": "Signal ids this device may write, matched on the STABLE `signal.id` (e.g. `u1/holding/40/uint16`), checked before any device I/O. Anything not listed is refused, whatever an `sb/write` command asks for. An empty list — the default — makes the device read-only, the correct posture for anything touching a control system."
+            }
+          }
+        },
+        "pollGroups": {
+          "type": "array",
+          "description": "Groups of signals polled together on one interval against one unit id.",
+          "items": { "$ref": "#/$defs/pollGroup" }
+        }
+      }
+    },
+    "connection": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How to reach the Modbus slave: TCP, serial RTU, or RTU-over-TCP. Published in `device.endpoint`.",
+      "properties": {
+        "transport": {
+          "type": "string",
+          "enum": ["tcp", "rtu", "rtutcp"],
+          "default": "tcp",
+          "description": "`tcp`, `rtu` (serial), or `rtutcp` (RTU framing over TCP)."
+        },
+        "host": { "type": "string", "default": "127.0.0.1", "description": "TCP / RTU-over-TCP host." },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 502, "description": "TCP / RTU-over-TCP port." },
+        "unitId": { "type": "integer", "minimum": 0, "maximum": 255, "default": 1, "description": "Default Modbus unit/slave id (overridable per poll group / signal-ref)." },
+        "timeoutMs": { "type": "integer", "minimum": 1, "default": 1000, "description": "Request timeout." },
+        "serialPort": { "type": "string", "description": "RTU only, e.g. `COM3` / `/dev/ttyUSB0`." },
+        "baudRate": { "type": "integer", "minimum": 1, "default": 9600, "description": "RTU serial baud." },
+        "parity": { "type": "string", "enum": ["N", "E", "O"], "default": "N", "description": "RTU serial parity." },
+        "stopBits": { "type": "integer", "enum": [1, 2], "default": 1, "description": "RTU serial stop bits." },
+        "byteSize": { "type": "integer", "enum": [5, 6, 7, 8], "default": 8, "description": "RTU serial data bits." }
+      }
+    },
+    "pollGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Signals read together on one interval against one unit id.",
+      "properties": {
+        "id": { "type": "string", "description": "Stable group id (logs, metrics, `sb/signals`). Defaults to `group-N`." },
+        "pollIntervalMs": { "type": "integer", "minimum": 1, "description": "How often this group is read. Falls back to the instance/global default." },
+        "unitId": { "type": "integer", "minimum": 0, "maximum": 255, "description": "Modbus unit id for this group's reads. Falls back to `connection.unitId`." },
+        "publishMode": { "type": "string", "enum": ["onChange", "always"], "description": "`onChange` / `always`. Falls back to the instance/global default." },
+        "maxGap": { "type": "integer", "minimum": 0, "description": "Coalescing gap (registers/bits). Falls back to the instance/global default." },
+        "signals": { "type": "array", "items": { "$ref": "#/$defs/signal" } }
+      }
+    },
+    "signal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "table", "address"],
+      "description": "One Modbus signal: a named, typed view onto a register/bit address.",
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "description": "Human name; the sanitized `data` channel token and the friendly read/write ref." },
+        "table": { "type": "string", "enum": ["coil", "discrete", "holding", "input"], "description": "The Modbus table. `coil`/`holding` are writable; `discrete`/`input` are read-only." },
+        "address": { "type": "integer", "minimum": 0, "description": "0-based PDU register/bit address." },
+        "type": {
+          "type": "string",
+          "enum": ["bool", "int16", "uint16", "int32", "uint32", "int64", "uint64", "float32", "float64", "string"],
+          "description": "Decoded value type. Bit tables (`coil`/`discrete`) are always `bool`; register tables default to `uint16`."
+        },
+        "count": { "type": "integer", "minimum": 1, "description": "Register count — required for `string`." },
+        "wordOrder": { "type": "string", "enum": ["big", "little"], "default": "big", "description": "Multi-register word order." },
+        "byteOrder": { "type": "string", "enum": ["big", "little"], "default": "big", "description": "Byte order within a register." },
+        "bit": { "type": "integer", "minimum": 0, "maximum": 63, "description": "Extract one bit of a holding/input register as a bool." },
+        "scale": { "type": "number", "description": "Linear scale applied to numeric values." },
+        "offset": { "type": "number", "description": "Linear offset applied to numeric values." },
+        "deadband": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Gates `onChange` publishing.",
+          "properties": {
+            "type": { "type": "string", "enum": ["none", "absolute", "percent"], "default": "none" },
+            "value": { "type": "number", "minimum": 0 }
+          }
+        }
+      }
+    }
+  }
+}
