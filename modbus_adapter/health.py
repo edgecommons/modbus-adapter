@@ -1,10 +1,15 @@
 """The canonical ``southbound_health`` metric (SOUTHBOUND.md §5), per instance.
 
-Emits the exact §5 measure set — ``connectionState``, ``publishLatencyMs``, ``pollLatencyMs``,
-``readErrors``, ``staleSignals`` — plus the §5-optional ``reconnects``. The gauge/latency values and
-the staleness count are read from the shared :class:`~modbus_adapter.metrics.ClientMetrics` the poll
-manager, publisher, and device tick feed; ``staleSignals`` counts configured signals with no update
-for longer than ``component.global.healthThresholds.staleSignalSecs`` (default 30).
+Emits the exact §5 eight-measure set — ``connectionState``, ``publishLatencyMs``, ``pollLatencyMs``,
+``readErrors``, ``staleSignals``, ``reconnects``, ``writeErrors``, ``signalsSubscribed``. The
+gauge/latency values, the interval error counters (drained on emit), and the staleness count are
+read from the shared :class:`~modbus_adapter.metrics.ClientMetrics` the poll manager, publisher,
+command surface, and device tick feed; ``staleSignals`` counts configured signals with no update
+for longer than ``component.global.healthThresholds.staleSignalSecs`` (default 30);
+``writeErrors`` counts device-path write failures only (the entry passed validation + the
+allow-list and then failed at the device); ``signalsSubscribed`` is the served configured/polled
+inventory while connected, 0 while disconnected (Modbus is a polling protocol — the inventory is
+what the session serves).
 
 :data:`HEALTH_MEASURES` is the parity anchor a test asserts against — keep it, the builder below, and
 ``docs/reference/metrics.md`` in step.
@@ -20,10 +25,10 @@ LOGGER = logging.getLogger("modbus_adapter.health")
 
 METRIC = "southbound_health"
 
-#: The exact SOUTHBOUND.md §5 measure set (+ the §5-optional ``reconnects``).
+#: The exact SOUTHBOUND.md §5 eight-measure set.
 HEALTH_MEASURES = (
     "connectionState", "publishLatencyMs", "pollLatencyMs", "readErrors", "staleSignals",
-    "reconnects",
+    "reconnects", "writeErrors", "signalsSubscribed",
 )
 
 
@@ -42,6 +47,8 @@ class HealthMetrics:
             .add_measure("readErrors", "Count", 60)
             .add_measure("staleSignals", "Count", 60)
             .add_measure("reconnects", "Count", 60)
+            .add_measure("writeErrors", "Count", 60)
+            .add_measure("signalsSubscribed", "Count", 1)
             .add_dimension("instance", instance_id)
             .build()
         )
@@ -57,6 +64,8 @@ class HealthMetrics:
                 "readErrors": float(self._counters.take_interval_read_errors()),
                 "staleSignals": float(self._counters.stale_count(now, self._stale_after)),
                 "reconnects": float(self._counters.take_interval_reconnects()),
+                "writeErrors": float(self._counters.take_interval_write_errors()),
+                "signalsSubscribed": float(self._counters.signals_serving() if connected else 0),
             })
         except Exception as e:  # noqa: BLE001 - health must never crash the device
             LOGGER.debug("health emit failed: %s", e)

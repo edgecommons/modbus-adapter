@@ -50,19 +50,21 @@ extraction) — Modbus has no eventing, discovery, or native quality.
 - **The write allow-list is checked BEFORE any device I/O.** `command_service.py`'s `write()` gates
   every entry on `config.permits(signal_id)` — matched on the stable `signal.id` (`writes.allow[]`,
   SOUTHBOUND.md §2.2 / D-U16) — before the write reaches the device. There is no boolean write toggle.
-- **`southbound_health`'s measure set is exact** (SOUTHBOUND.md §5): `connectionState`,
-  `publishLatencyMs`, `pollLatencyMs`, `readErrors`, `staleSignals`, plus the §5-optional
-  `reconnects`. `health.py`'s `HEALTH_MEASURES` is the parity anchor `tests/test_health.py` asserts
+- **`southbound_health`'s measure set is exact** (SOUTHBOUND.md §5, all eight): `connectionState`,
+  `publishLatencyMs`, `pollLatencyMs`, `readErrors`, `staleSignals`, `reconnects`, `writeErrors`
+  (device-path write failures only — policy refusals/unresolved refs/missing values/encode errors
+  never count), `signalsSubscribed` (the served configured/polled inventory while connected, 0 while
+  disconnected). `health.py`'s `HEALTH_MEASURES` is the parity anchor `tests/test_health.py` asserts
   against — move it, the builder, and `docs/reference/metrics.md` together.
 - **Every sample carries a quality.** A failed read publishes a `BAD` sample (never omitted); a
   successful read leaves quality for the `data()` facade to default to `GOOD`/`qualityRaw:"unspecified"`
   (Modbus has no native quality).
-- **`repoll` is refused while paused** (`BAD_ARGS`); `sb/pause`/`sb/resume` are confirmed + idempotent,
-  reply `{paused, changed}`.
+- **`repoll` is refused while paused** with the top-level code `PAUSED` (a whole-operation refusal,
+  not a `BAD_ARGS`); `sb/pause`/`sb/resume` are confirmed + idempotent, reply `{paused, changed}`.
 - **Instance routing** (D-EIP-13): the body `instance` selector is optional iff exactly one device is
   configured; otherwise a missing id is `BAD_ARGS` and an unknown id is `NO_SUCH_INSTANCE`.
-- **Standardized error codes:** `BAD_ARGS`, `NO_SUCH_INSTANCE`, `WRITE_NOT_ALLOWED`, `WRITE_FAILED`,
-  `RECONNECT_FAILED`. No `WRITE_DISABLED`/`INSTANCE_REQUIRED`/`INSTANCE_NOT_FOUND`.
+- **Standardized error codes:** `BAD_ARGS`, `PAUSED`, `NO_SUCH_INSTANCE`, `WRITE_NOT_ALLOWED`,
+  `WRITE_FAILED`, `RECONNECT_FAILED`. No `WRITE_DISABLED`/`INSTANCE_REQUIRED`/`INSTANCE_NOT_FOUND`.
 
 ## Validation expectations
 

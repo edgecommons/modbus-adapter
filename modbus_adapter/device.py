@@ -36,6 +36,9 @@ class ModbusDevice:
         self._events = EventEmitter(self._instance.events())
 
         self._counters = ClientMetrics()
+        # The signalsSubscribed gauge: Modbus is a polling protocol, so "subscribed" is the
+        # configured/polled inventory the session serves (health emits 0 while disconnected).
+        self._counters.set_signals_serving(len(config.all_signals()))
         self._pause = PauseState()
         self._health = HealthMetrics(metrics, config_manager, config.id, self._counters,
                                      config.stale_signal_secs)

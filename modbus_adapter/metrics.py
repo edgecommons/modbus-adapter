@@ -26,8 +26,9 @@ COMMAND_VERBS = (
 
 class ClientMetrics:
     """Per-instance counters + the live-value trackers that feed the canonical ``southbound_health``
-    metric (SOUTHBOUND.md §5): read/write totals, read errors, the last observed poll/publish
-    latency, the reconnect count, and a per-signal last-update tracker for ``staleSignals``."""
+    metric (SOUTHBOUND.md §5): read/write totals, read/write errors, the last observed poll/publish
+    latency, the reconnect count, the served-inventory gauge behind ``signalsSubscribed``, and a
+    per-signal last-update tracker for ``staleSignals``."""
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -36,7 +37,9 @@ class ClientMetrics:
         self._write_interval = 0
         self._write_total = 0
         self._read_errors_interval = 0
+        self._write_errors_interval = 0
         self._reconnects_interval = 0
+        self._signals_serving = 0
         self._last_poll_latency_ms = 0.0
         self._last_publish_latency_ms = 0.0
         self._last_update = {}                 # signal_id -> monotonic timestamp of its last update
@@ -60,6 +63,30 @@ class ClientMetrics:
             v = self._read_errors_interval
             self._read_errors_interval = 0
             return v
+
+    def increment_write_error(self, n=1):
+        """A DEVICE-PATH write failure only — the entry passed validation + the allow-list and was
+        then rejected by the device (or aborted by an unavailable session). Policy refusals,
+        unresolvable refs, missing values, and encode errors never reach this counter."""
+        with self._lock:
+            self._write_errors_interval += n
+
+    def take_interval_write_errors(self) -> int:
+        with self._lock:
+            v = self._write_errors_interval
+            self._write_errors_interval = 0
+            return v
+
+    def set_signals_serving(self, n):
+        """The number of signals this instance's session serves (the configured/polled inventory —
+        Modbus has no subscriptions) — the value behind the ``signalsSubscribed`` gauge while the
+        link is up."""
+        with self._lock:
+            self._signals_serving = int(n)
+
+    def signals_serving(self) -> int:
+        with self._lock:
+            return self._signals_serving
 
     def increment_reconnect(self, n=1):
         with self._lock:
