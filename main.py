@@ -5,13 +5,13 @@ ModbusDevice (its connection blocks/retries independently, so one device down do
 others). The library owns SIGTERM/SIGINT → graceful shutdown.
 
 The on-demand command surface is served through the library's **command inbox**
-(``runtime.get_commands()``): the verbs are registered once here through the scope-aware
-``register_scoped`` form, so each handler receives the topic-addressed instance token beside the
-request (the inbox subscribes both D-U28 command scopes, ``ecv1/{device}/modbus-adapter/cmd/#`` and
-``ecv1/{device}/modbus-adapter/+/cmd/#``). ``modbus_adapter.routing.resolve_instance`` dispatches
-each request into the addressed device per SOUTHBOUND §2.2: the topic-addressed instance is
-authoritative (a conflicting body ``instance`` is ``BAD_ARGS``); a component-scoped delivery routes
-by the body selector, optional iff exactly one device is configured. Data (``data``), events
+(``runtime.get_commands()``): the nine verbs are registered once here, each declaring
+``CommandScope.INSTANCE`` (they all act on one slave). The inbox subscribes both D-U28 command
+scopes (``ecv1/{device}/modbus-adapter/cmd/#`` and ``ecv1/{device}/modbus-adapter/+/cmd/#``), owns
+the addressing — topic token, body ``instance``, and the conflict refusal — and hands each handler
+the resolved ``addressed_instance``. ``modbus_adapter.routing.resolve_instance`` then applies the
+two policies that need this adapter's configuration (D-SC-4): the sole configured device when no
+instance is addressed, and ``NO_SUCH_INSTANCE`` for one it does not serve. Data (``data``), events
 (``evt``), the ``state`` keepalive, the ``southbound_health``
 + ``sys`` metrics, and the ``cfg`` publisher all ride the UNS classes automatically.
 """
@@ -21,11 +21,12 @@ import sys
 import threading
 
 from edgecommons import EdgeCommonsBuilder
-from edgecommons.heartbeat.instance_connectivity import InstanceConnectivity
+from edgecommons.command_inbox import CommandScope
 
 from modbus_adapter.command_service import panels
 from modbus_adapter.config.server_configuration import ServerConfiguration
 from modbus_adapter.device import ModbusDevice
+from modbus_adapter.instance_state import instance_connectivity
 from modbus_adapter.routing import resolve_instance
 
 logger = logging.getLogger("main")
@@ -52,30 +53,29 @@ def main():
     global_config = config_manager.get_global_config()
     devices = {}                              # instance_id -> ModbusDevice (populated as each connects)
 
-    # Register the Modbus command verbs on the shared command inbox (once), through the scope-aware
-    # registration form: the inbox hands each handler the topic-addressed instance token (None for a
-    # component-scoped delivery), and routing.resolve_instance picks the addressed device per §2.2.
-    # Each handler returns the verb result (wrapped as {"ok":true,"result":...}) or raises
-    # CommandException for a coded error reply.
+    # Register the Modbus command verbs on the shared command inbox (once). Every verb acts on one
+    # slave, so each declares CommandScope.INSTANCE: the inbox enforces that addressing before
+    # dispatch and hands the handler the resolved instance, and routing.resolve_instance applies the
+    # adapter-side configured-default / existence policy. Each handler returns the verb result
+    # (wrapped as {"ok":true,"result":...}) or raises CommandException for a coded error reply.
     commands = runtime.get_commands()
     if commands is not None:
-        def scoped(call):
-            """Bind a CommandService call into a §2.2 scope-aware inbox handler."""
+        def instance_verb(call):
+            """Bind a CommandService call into an INSTANCE-scoped inbox handler."""
             def handler(request, addressed_instance):
-                body = _body(request)
-                device = resolve_instance(devices, body, addressed_instance)
-                return call(device.commands, body)
+                device = resolve_instance(devices, addressed_instance)
+                return call(device.commands, _body(request))
             return handler
 
-        commands.register_scoped("sb/read", scoped(lambda c, b: c.read(b)))
-        commands.register_scoped("sb/write", scoped(lambda c, b: c.write(b)))
-        commands.register_scoped("sb/status", scoped(lambda c, b: c.status()))
-        commands.register_scoped("sb/signals", scoped(lambda c, b: c.signals()))
-        commands.register_scoped("sb/browse", scoped(lambda c, b: c.browse(b)))
-        commands.register_scoped("sb/pause", scoped(lambda c, b: c.pause()))
-        commands.register_scoped("sb/resume", scoped(lambda c, b: c.resume()))
-        commands.register_scoped("reconnect", scoped(lambda c, b: c.reconnect()))
-        commands.register_scoped("repoll", scoped(lambda c, b: c.repoll()))
+        commands.register("sb/read", CommandScope.INSTANCE, instance_verb(lambda c, b: c.read(b)))
+        commands.register("sb/write", CommandScope.INSTANCE, instance_verb(lambda c, b: c.write(b)))
+        commands.register("sb/status", CommandScope.INSTANCE, instance_verb(lambda c, b: c.status()))
+        commands.register("sb/signals", CommandScope.INSTANCE, instance_verb(lambda c, b: c.signals()))
+        commands.register("sb/browse", CommandScope.INSTANCE, instance_verb(lambda c, b: c.browse(b)))
+        commands.register("sb/pause", CommandScope.INSTANCE, instance_verb(lambda c, b: c.pause()))
+        commands.register("sb/resume", CommandScope.INSTANCE, instance_verb(lambda c, b: c.resume()))
+        commands.register("reconnect", CommandScope.INSTANCE, instance_verb(lambda c, b: c.reconnect()))
+        commands.register("repoll", CommandScope.INSTANCE, instance_verb(lambda c, b: c.repoll()))
         # The edge-console panel trio (overview/signals/diagnostics) for the descriptor surface.
         for panel in panels():
             commands.register_panel(panel)
@@ -84,19 +84,12 @@ def main():
         logger.warning("No command inbox (unresolved identity) — command surface disabled")
 
     # Report each configured slave's connectivity AT THE INSTANCE LEVEL via the component's state
-    # keepalive's instances[] (the #1c surface): a slave whose device has not (re)connected reads
-    # disconnected. Identity and the state/lifecycle keepalive stay at component scope; this is the
-    # per-slave connectivity view.
-    def _instance_connectivity():
-        out = []
-        for iid in config_manager.get_instance_ids():
-            device = devices.get(iid)
-            connected = device is not None and device.is_connected()
-            detail = device.endpoint if device is not None else None
-            out.append(InstanceConnectivity.of(iid, connected, detail))
-        return out
-
-    runtime.set_instance_connectivity_provider(_instance_connectivity)
+    # keepalive's instances[] (the #1c surface): the normalized connected flag, the endpoint detail,
+    # and the instance state token from the single state model that also answers sb/status (D-SC-7),
+    # so a paused slave reads PAUSED instead of looking silently stale. Identity and the
+    # state/lifecycle keepalive stay at component scope; this is the per-slave view.
+    runtime.set_instance_connectivity_provider(
+        lambda: instance_connectivity(config_manager.get_instance_ids(), devices))
 
     def worker(instance_id):
         try:

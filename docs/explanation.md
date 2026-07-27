@@ -18,7 +18,8 @@ Addressing follows the UNS: every topic is `ecv1/{device}/{component}/{instance}
 built and validated by the library — never a hand-assembled string. Telemetry rides the `data` class
 (`ecv1/{device}/modbus-adapter/{instance}/data/{signal}`); discrete events ride `evt`; the on-demand
 command surface rides the library's `cmd` inbox; and the library owns `state` (a keepalive — whose
-RUNNING body also carries each configured slave's live connectivity in an `instances[]` array),
+RUNNING body also carries each configured slave's live connectivity and state in an `instances[]`
+array),
 `metric` (`southbound_health`, system metrics, and Modbus operational metrics), and `cfg`
 automatically. Every message carries a top-level
 **`identity`** element (`{hier, path, component, instance}`) placing the reading in the enterprise
@@ -71,9 +72,10 @@ Two consequences worth internalizing:
 Keeping them separate means a consumer can fire a control verb without perturbing the telemetry
 stream, and routing/partitioning can key on the data-plane topic alone. The command inbox subscribes
 both command scopes (`ecv1/{device}/modbus-adapter/cmd/#` and `ecv1/{device}/modbus-adapter/+/cmd/#`).
-An instance-scoped topic addresses that device authoritatively (a conflicting body `instance` is
-refused with `BAD_ARGS`); a component-scoped request picks the target device with an `instance` field
-in the request body, optional when only one device is configured.
+Every verb the adapter serves declares the `instance` scope: an instance-scoped topic addresses that
+device by its token, a component-scoped request names the device with an `instance` field in the
+request body, a disagreement between the two is refused with `BAD_ARGS`, and naming no instance at
+all addresses the sole configured device.
 
 Metrics deliberately stay low-cardinality. `southbound_health` answers the common binary question
 (`connectionState`, interval `readErrors`), while the richer groups describe connection attempts,

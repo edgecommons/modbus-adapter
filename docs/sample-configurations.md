@@ -687,15 +687,17 @@ Metrics are emitted to `metricEmission.target` (auto-routing to the UNS `metric`
 `messaging`) and the compatibility counters remain queryable via the `sb/status` command verb. A link up/down transition also raises/clears a `critical`
 alarm on `evt/critical/connection` immediately (the same channel for the drop and the restore, so a
 console tracking `evt/critical/#` sees both ends). Each instance's current up/down state is additionally
-surfaced per-slave in the `main` `state` keepalive's `instances[]` array (`{instance, connected, detail}`),
+surfaced per-slave in the `main` `state` keepalive's `instances[]` array
+(`{instance, connected, state, detail}`),
 driven by the same live poll reads (not a cached client flag), so a mid-session loss reads
 `connected: false` promptly.
 
 ### Reads vs writes (the command surface)
 
 Polling is the read **plane**. The command surface is separate — served by the library command inbox
-(`ecv1/{device}/modbus-adapter/cmd/{verb}`), with the target device selected by an `instance` field
-in the request body. Every reply is `{ "ok": true, "result": … }` or `{ "ok": false, "error": … }`.
+(`ecv1/{device}/modbus-adapter[/{instance}]/cmd/{verb}`), with the target device selected by the
+topic's instance token or an `instance` field in the request body. Every reply is
+`{ "ok": true, "result": … }` or `{ "ok": false, "error": … }`.
 
 - **Writes** (`sb/write`) accept a signal only when its stable `signal.id` is on the instance's
   `writes.allow` list, checked before any device I/O; a wholly-refused batch replies `WRITE_NOT_ALLOWED`.
@@ -706,7 +708,8 @@ in the request body. Every reply is `{ "ok": true, "result": … }` or `{ "ok": 
   (failure) audit event.
 - **Reads** (`sb/read`) are request/reply and return `{ id, reads: [...] }` — on-demand, independent of
   the poll loop.
-- **Control** verbs `sb/status` / `sb/signals` return connection state (incl. `paused`) + counters and
+- **Control** verbs `sb/status` / `sb/signals` return instance state (the keepalive's `state` token,
+  plus `connected`/`paused`) + counters and
   the full signal list; `sb/browse` pages that inventory; `sb/pause` / `sb/resume` suspend and resume
   the instance; `reconnect` re-establishes the link and `repoll` forces an immediate poll (refused
   while paused).

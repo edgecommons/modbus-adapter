@@ -5,8 +5,8 @@ Each device owns a ``gg.instance(id)`` handle: the publisher and event emitter p
 instance's ``data()``/``events()`` facades (``docs/platform/DESIGN-class-facades.md``), which mint
 the UNS ``data``/``evt`` topics and stamp the top-level ``identity`` element carrying this instance
 token. The on-demand command surface (``self.commands``) is served through the shared command inbox
-— ``main.py`` registers the verbs and dispatches into this device by the request body's ``instance``
-selector; the device no longer subscribes any topic itself.
+— ``main.py`` registers the verbs at ``CommandScope.INSTANCE`` and dispatches into this device by
+the addressed instance the inbox resolves; the device no longer subscribes any topic itself.
 """
 import logging
 import threading
@@ -99,6 +99,12 @@ class ModbusDevice:
     def is_paused(self) -> bool:
         """Whether this device is paused (``sb/pause``) — polling and publishing are suspended."""
         return self._pause.is_paused()
+
+    def state(self) -> str:
+        """This instance's state token (``ONLINE``/``PAUSED``/``BACKOFF``) for the keepalive's
+        ``instances[]``, read from the same single state model that answers ``sb/status``
+        (D-SC-7)."""
+        return self.commands.state()
 
     @property
     def endpoint(self) -> str:
