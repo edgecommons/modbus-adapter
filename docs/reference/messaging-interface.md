@@ -7,8 +7,9 @@ data/control plane model, see [explanation.md](../explanation.md); for client re
 
 - `{device}` — the resolved Thing name (the last `hierarchy` level).
 - `{component}` — the component UNS token, `modbus-adapter`.
-- `{instance}` — a device instance id (`plc1`, …) for `data`/`evt`; `main` for the shared command
-  inbox, the `state` keepalive, and `metric`.
+- `{instance}` — a device instance id (`plc1`, …) for `data`/`evt`, and optionally on `cmd` topics
+  to address a device by topic; absent on the component-scope `cmd` inbox, the `state` keepalive,
+  and `metric` (whose envelope identity carries `main`).
 
 ## Envelope
 
@@ -32,15 +33,15 @@ Request/reply carries `header.reply_to` + `header.correlation_id`; the reply is 
 |-------|---------|-----------|-------|-------|
 | `data` | `SouthboundSignalUpdate` | adapter → bus | `ecv1/{device}/modbus-adapter/{instance}/data/{signal}` | — |
 | `evt` | `evt` | adapter → bus | `ecv1/{device}/modbus-adapter/{instance}/evt/{severity}/{connection\|write}` | — |
-| `cmd` | `sb/read` | bus → adapter | `ecv1/{device}/modbus-adapter/cmd/sb/read` | `{ok,result}` |
-| `cmd` | `sb/write` | bus → adapter | `ecv1/{device}/modbus-adapter/cmd/sb/write` | `{ok,result}` |
-| `cmd` | `sb/status` | bus → adapter | `ecv1/{device}/modbus-adapter/cmd/sb/status` | `{ok,result}` |
-| `cmd` | `sb/signals` | bus → adapter | `ecv1/{device}/modbus-adapter/cmd/sb/signals` | `{ok,result}` |
-| `cmd` | `sb/browse` | bus → adapter | `ecv1/{device}/modbus-adapter/cmd/sb/browse` | `{ok,result}` |
-| `cmd` | `sb/pause` | bus → adapter | `ecv1/{device}/modbus-adapter/cmd/sb/pause` | `{ok,result}` |
-| `cmd` | `sb/resume` | bus → adapter | `ecv1/{device}/modbus-adapter/cmd/sb/resume` | `{ok,result}` |
-| `cmd` | `reconnect` | bus → adapter | `ecv1/{device}/modbus-adapter/cmd/reconnect` | `{ok,result}` |
-| `cmd` | `repoll` | bus → adapter | `ecv1/{device}/modbus-adapter/cmd/repoll` | `{ok,result}` |
+| `cmd` | `sb/read` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/sb/read` | `{ok,result}` |
+| `cmd` | `sb/write` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/sb/write` | `{ok,result}` |
+| `cmd` | `sb/status` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/sb/status` | `{ok,result}` |
+| `cmd` | `sb/signals` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/sb/signals` | `{ok,result}` |
+| `cmd` | `sb/browse` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/sb/browse` | `{ok,result}` |
+| `cmd` | `sb/pause` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/sb/pause` | `{ok,result}` |
+| `cmd` | `sb/resume` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/sb/resume` | `{ok,result}` |
+| `cmd` | `reconnect` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/reconnect` | `{ok,result}` |
+| `cmd` | `repoll` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/repoll` | `{ok,result}` |
 | `metric` | `southbound_health`, `ModbusConnection`, `ModbusInventory`, `ModbusPoll`, `ModbusPublish`, `ModbusCommand` | adapter → bus (auto) | `ecv1/{device}/modbus-adapter/metric/{metricName}` | — |
 | `state` | keepalive | adapter → bus (auto) | `ecv1/{device}/modbus-adapter/state` | — |
 
@@ -52,15 +53,24 @@ facades and `cmd` replies via the command inbox — never a hand-assembled topic
 
 ## The command inbox
 
-The read/write/control surface is served through the library's **command inbox** — a single
-component-scope subscription `ecv1/{device}/modbus-adapter/cmd/#` (the instance token is optional and
-present only for explicit multi-instance addressing). A request's **verb** is the topic channel after `cmd/` and must equal
-`header.name`. Built-in verbs (`ping`, `reload-config`, `get-configuration`) ship with every component;
-the adapter adds the `sb/*` + `reconnect`/`repoll` verbs below.
+The read/write/control surface is served through the library's **command inbox**, which subscribes
+both command scopes on the primary connection: the component scope
+`ecv1/{device}/modbus-adapter/cmd/#` and the instance scope `ecv1/{device}/modbus-adapter/+/cmd/#`.
+A request's **verb** is the topic channel after the `/cmd/` marker and must equal `header.name`.
+Built-in verbs (`ping`, `status`, `describe`, `reload-config`, `get-configuration`) ship with every
+component; the adapter adds the `sb/*` + `reconnect`/`repoll` verbs below.
 
-Because the inbox is `main`-only, a multi-instance adapter selects the target device with an
-**`instance`** field in the request body (optional when only one device is configured). The reply body
-is `{"ok": true, "result": <verb result>}` on success, or
+The adapter routes every request to one configured device:
+
+- An **instance-scoped** request (`ecv1/{device}/modbus-adapter/{instance}/cmd/…`) routes by the
+  topic's instance token, which is **authoritative**: a body `instance` that disagrees with it is
+  refused with `BAD_ARGS`; with only the topic token present, no body selector is needed.
+- A **component-scoped** request (`ecv1/{device}/modbus-adapter/cmd/…`) routes by the **`instance`**
+  field in the request body, optional when only one device is configured (missing on a multi-device
+  adapter is `BAD_ARGS`).
+- A selector that names no configured device is `NO_SUCH_INSTANCE`.
+
+The reply body is `{"ok": true, "result": <verb result>}` on success, or
 `{"ok": false, "error": {"code", "message"}}` on failure.
 
 ### Error codes
@@ -69,7 +79,7 @@ The adapter uses the standardized southbound error-code set:
 
 | Code | Meaning |
 |------|---------|
-| `BAD_ARGS` | Malformed request — a missing `instance` on a multi-device adapter, a bad `sb/browse` cursor or ref, or a browse request mixing the paged and hierarchical forms. |
+| `BAD_ARGS` | Malformed request — a missing `instance` on a multi-device adapter, a body `instance` conflicting with the topic-addressed instance, a bad `sb/browse` cursor or ref, or a browse request mixing the paged and hierarchical forms. |
 | `PAUSED` | The whole operation is prohibited while the instance is paused — `repoll` on a paused instance. |
 | `NO_SUCH_INSTANCE` | The `instance` selector names no configured device. |
 | `WRITE_NOT_ALLOWED` | Every entry of an `sb/write` batch is refused by the instance's `writes.allow` list. |

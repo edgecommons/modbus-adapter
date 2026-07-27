@@ -69,10 +69,11 @@ Two consequences worth internalizing:
   and `sb/status` / `sb/signals` / `reconnect` / `repoll` verbs.
 
 Keeping them separate means a consumer can fire a control verb without perturbing the telemetry
-stream, and routing/partitioning can key on the data-plane topic alone. The command inbox is a single
-component-scope subscription (`ecv1/{device}/modbus-adapter/cmd/#`); the instance token is optional and
-appears only for explicit multi-instance addressing. A multi-instance adapter picks the target device
-with an `instance` field in the request body.
+stream, and routing/partitioning can key on the data-plane topic alone. The command inbox subscribes
+both command scopes (`ecv1/{device}/modbus-adapter/cmd/#` and `ecv1/{device}/modbus-adapter/+/cmd/#`).
+An instance-scoped topic addresses that device authoritatively (a conflicting body `instance` is
+refused with `BAD_ARGS`); a component-scoped request picks the target device with an `instance` field
+in the request body, optional when only one device is configured.
 
 Metrics deliberately stay low-cardinality. `southbound_health` answers the common binary question
 (`connectionState`, interval `readErrors`), while the richer groups describe connection attempts,
