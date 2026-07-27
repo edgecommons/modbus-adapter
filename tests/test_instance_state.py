@@ -47,8 +47,8 @@ def test_device_state_tokens():
     assert device_state(paused=False, connected=True) == ONLINE
     assert device_state(paused=False, connected=False) == BACKOFF
     assert device_state(paused=True, connected=True) == PAUSED
-    # administrative state wins over connectivity
-    assert device_state(paused=True, connected=False) == PAUSED
+    # link truth wins: a paused instance whose link is down reads BACKOFF, never PAUSED
+    assert device_state(paused=True, connected=False) == BACKOFF
 
 
 # --- the wire element ---------------------------------------------------------------------------
@@ -73,6 +73,14 @@ def test_disconnected_instance_is_backoff():
     entries = instance_connectivity(["plc1"], {"plc1": _device(connected=False)})
     element = entries[0].to_dict()
     assert element["state"] == BACKOFF and element["connected"] is False
+
+
+def test_a_break_while_paused_reports_backoff_not_paused():
+    # Link truth wins: the keepalive shows the link is down; the pause stays visible on sb/status.
+    device = _device(connected=False, paused=True)
+    element = instance_connectivity(["plc1"], {"plc1": device})[0].to_dict()
+    assert element["state"] == BACKOFF and element["connected"] is False
+    assert device.commands.status()["paused"] is True
 
 
 def test_instance_without_a_device_yet_is_connecting():

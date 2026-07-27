@@ -11,12 +11,16 @@ gone quiet.
 The vocabulary is the shared one (D-SC-7):
 
 - ``ONLINE`` — the slave answers reads.
-- ``PAUSED`` — ``sb/pause`` is latched: polling and publishing are suspended. Administrative state
-  wins over connectivity, so a paused instance reads ``PAUSED`` whatever the link is doing (the
-  normalized ``connected`` flag still carries the live liveness beside it).
+- ``PAUSED`` — ``sb/pause`` is latched **and the link is up**: the instance is deliberately quiet
+  rather than stale.
 - ``BACKOFF`` — the device is running but its link is down; the poll loop keeps retrying.
 - ``CONNECTING`` — a configured instance whose device has not come up yet (the initial connect
   blocks and retries every few seconds), so there is nothing to poll or pause.
+
+**Link truth wins** (the fleet-wide precedence, shared with the OPC UA and EtherNet/IP adapters and
+the scaffold templates): a paused instance whose link is down reports ``BACKOFF`` — or ``CONNECTING``
+before its first connect — never ``PAUSED``. The pause stays visible beside it, in ``sb/status``'s
+``paused`` field, so no surface hides either fact.
 """
 from edgecommons.heartbeat.instance_connectivity import InstanceConnectivity
 
@@ -26,16 +30,16 @@ ONLINE = "ONLINE"
 CONNECTING = "CONNECTING"
 #: The device is running but the link is down and being retried.
 BACKOFF = "BACKOFF"
-#: ``sb/pause`` is latched — polling and publishing are suspended.
+#: ``sb/pause`` is latched and the link is up — polling and publishing are suspended.
 PAUSED = "PAUSED"
 
 
 def device_state(paused: bool, connected: bool) -> str:
-    """The state token for a running device: ``PAUSED`` beats connectivity, then
-    ``ONLINE``/``BACKOFF``."""
-    if paused:
-        return PAUSED
-    return ONLINE if connected else BACKOFF
+    """The state token for a running device. Link truth wins: a down link is ``BACKOFF`` whether or
+    not the instance is paused; ``PAUSED`` is reported only while the link is up."""
+    if not connected:
+        return BACKOFF
+    return PAUSED if paused else ONLINE
 
 
 def instance_connectivity(instance_ids, devices):

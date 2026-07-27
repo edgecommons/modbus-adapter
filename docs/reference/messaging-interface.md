@@ -246,10 +246,11 @@ without a separate UNS instance per slave (identity, data, and lifecycle stay un
   (which reflects intent and lags a socket that died mid-session), so a mid-session southbound loss shows
   up promptly as `connected: false` on the next keepalive.
 - `state` — the instance's condition in the shared vocabulary, the same token `sb/status` returns:
-  `ONLINE` (the slave answers reads), `PAUSED` (`sb/pause` is latched — polling and publishing are
-  suspended, so the instance is deliberately quiet), `BACKOFF` (the device is up but its link is down
-  and being retried), `CONNECTING` (the instance's device has not come up yet). The administrative
-  `PAUSED` state wins over connectivity, and `connected` carries the live liveness beside it.
+  `ONLINE` (the slave answers reads), `PAUSED` (`sb/pause` is latched and the link is up, so the
+  instance is deliberately quiet rather than stale), `BACKOFF` (the link is down and being retried),
+  `CONNECTING` (the instance's device has not come up yet). Link truth wins: a paused instance whose
+  link is down reports `BACKOFF` — `CONNECTING` before its first connect — never `PAUSED`, and the
+  pause stays visible in `sb/status`'s `paused` field.
 - `detail` — the connection describe string (`tcp://host:port unit=N` / `rtu://COM@baud unit=N`); omitted
   before that slave's device has connected (`connected` is then `false`).
 - `instances` is present **only** on the RUNNING keepalive (the best-effort `STOPPED` shutdown state, and

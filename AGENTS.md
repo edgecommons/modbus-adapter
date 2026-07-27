@@ -78,8 +78,10 @@ extraction) — Modbus has no eventing, discovery, or native quality.
 - **One instance state model** (D-SC-7): `instance_state.device_state` is the only place a state
   token is decided, and both surfaces read it — `sb/status`'s `state` field and the `state`
   keepalive's `instances[]` entries (`ONLINE`/`PAUSED`/`BACKOFF`/`CONNECTING`). Never add a second
-  bookkeeping path; a paused instance must publish `PAUSED` so a fleet view can tell it from a stale
-  one.
+  bookkeeping path. **Link truth wins** (fleet-wide, shared with the OPC UA / EtherNet/IP adapters
+  and the templates): `PAUSED` only while the link is up, so a paused instance whose link is down is
+  `BACKOFF` (`CONNECTING` before its first connect) with the pause still reported in `sb/status`'s
+  `paused` field.
 - **Standardized error codes:** `BAD_ARGS`, `PAUSED`, `NO_SUCH_INSTANCE`, `WRITE_NOT_ALLOWED`,
   `WRITE_FAILED`, `RECONNECT_FAILED`. No `WRITE_DISABLED`/`INSTANCE_REQUIRED`/`INSTANCE_NOT_FOUND`.
 

@@ -48,8 +48,9 @@ by both `sb/status` and the keepalive's `instances[]`.
   flush), and the command surface. Confirmed + idempotent, reply `{paused, changed}`. `repoll` is
   refused while paused (`PAUSED`, see D-M2) — a paused instance publishes nothing. The paused state is
   surfaced on **both** command-surface and keepalive surfaces: `sb/status` carries `paused` plus the
-  `state` token, and the `state` keepalive's `instances[]` carries `PAUSED` for that instance
-  (D-M9) — one state model, so a fleet view can tell a deliberately quiet slave from a stale one.
+  `state` token, and the `state` keepalive's `instances[]` carries `PAUSED` for that instance while
+  its link is up (D-M9) — one state model, so a fleet view can tell a deliberately quiet slave from
+  a stale one.
 
 - **D-M4 — `southbound_health` to the exact §5 eight-measure set.** `health.py` emits
   `connectionState`, `publishLatencyMs`, `pollLatencyMs`, `readErrors`, `staleSignals`, `reconnects`,
@@ -140,10 +141,11 @@ by both `sb/status` and the keepalive's `instances[]`.
      reversing D-M3's deviation. It comes from the **single** state model
      `instance_state.device_state(paused, connected)`, which also answers `sb/status`'s new `state`
      field (`ModbusDevice.state()` → `CommandService.state()`), so a pushed keepalive and a pulled
-     status can never disagree. `PAUSED` beats connectivity (administrative truth), with the
-     normalized `connected` flag still carrying live liveness beside it; a configured instance whose
-     device thread has not connected yet reads `CONNECTING` (its blocking initial connect is
-     retrying), and a running device with a dead link reads `BACKOFF`. Additive on the wire —
+     status can never disagree. **Link truth wins** — the fleet-wide precedence shared with the OPC UA
+     and EtherNet/IP adapters and the scaffold templates: `PAUSED` is reported only while the link is
+     up, so a paused instance whose link is down reads `BACKOFF` (and `CONNECTING` before its first
+     connect, its blocking initial connect still retrying), with the pause itself still visible in
+     `sb/status`'s `paused` field. A running device with a dead link reads `BACKOFF` either way. Additive on the wire —
      consumers ignoring an unknown/absent `state` are unaffected. `main.py`'s provider is now a
      one-liner over `instance_state.instance_connectivity`, so the sample builder is inside the
      coverage gate and the published element is pinned by unit tests.

@@ -267,7 +267,8 @@ class CommandService:
 
     def state(self) -> str:
         """This instance's state token (``ONLINE``/``PAUSED``/``BACKOFF``) — the one model both
-        ``sb/status`` and the keepalive's ``instances[]`` read (D-SC-7)."""
+        ``sb/status`` and the keepalive's ``instances[]`` read (D-SC-7). Link truth wins: a paused
+        instance whose link is down reads ``BACKOFF``, the pause still reported in ``paused``."""
         return device_state(self.is_paused(), self._conn.is_connected())
 
     def is_paused(self) -> bool:
