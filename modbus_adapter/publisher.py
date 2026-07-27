@@ -17,8 +17,10 @@ and tags, and serializes as the typed ``SouthboundSignalUpdate`` protobuf body.
 
 With ``batchMs > 0``, samples are buffered per signal and flushed together by :meth:`flush` (driven by
 the device timer); otherwise each sample publishes immediately. Modbus has no device-origin timestamp,
-so ``sourceTs`` is not synthesized. Successful Modbus polls stamp ``serverTs`` with the register-read
-completion time; if a caller omits it, the facade still defaults ``serverTs`` to the publish time.
+so ``sourceTs`` is not synthesized. ``serverTs`` is the **capture** time (the four-slot timestamp
+model): every poll-path sample -- successful read, decode failure, or failed block read -- stamps it
+with the register-read completion time, so a batched flush carries the read-time stamp rather than
+falling back to the facade's ``serverTs``-at-publish default (which would drift under batching).
 """
 import logging
 import threading

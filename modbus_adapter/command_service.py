@@ -145,9 +145,13 @@ class CommandService:
                 except Exception as e:  # noqa: BLE001
                     value, quality, raw = None, "BAD", (str(e) or "read error")
                     self._counters.increment_read_error()
+                # Capture time (four-slot timestamp model): serverTs is stamped the moment the
+                # register read completes -- the same stamp the poll path uses -- not when the
+                # reply is assembled.
+                server_ts = _now_iso()
                 self._counters.increment_read()
                 reads.append({"signal": signal_obj, "value": value, "quality": quality,
-                              "qualityRaw": raw, "sourceTs": None, "serverTs": _now_iso()})
+                              "qualityRaw": raw, "sourceTs": None, "serverTs": server_ts})
             read_signals = len(reads)
             result = RESULT_SUCCESS
             return {"id": self._config.id, "reads": reads}
