@@ -143,7 +143,7 @@ def test_repoll_refused_while_paused():
     svc.pause()
     with pytest.raises(CommandException) as ei:
         svc.repoll()
-    assert ei.value.code == "BAD_ARGS" and poller.polled == 0
+    assert ei.value.code == "PAUSED" and poller.polled == 0
     svc.resume()
     assert svc.repoll()["polled"] == 2 and poller.polled == 1
 
@@ -169,6 +169,54 @@ def test_browse_bad_cursor():
     assert ei.value.code == "BAD_ARGS"
 
 
+def test_browse_hierarchical_root():
+    # presence of `ref` selects the hierarchical (treeBrowser) mode over the same inventory
+    svc, _, _, _ = _svc()
+    res = svc.browse({"ref": "root"})
+    assert res["mode"] == "hierarchical" and res["truncated"] is False
+    root = res["root"]
+    assert root["nodeId"] == "root" and root["nodeClass"] == "device" and root["name"] == "plc1"
+    targets = [r["target"] for r in root["refs"]]
+    assert all(r["referenceType"] == "contains" for r in root["refs"])
+    assert [t["nodeId"] for t in targets] == ["u1/holding/0/uint16", "u1/holding/10/int16"]
+    assert targets[0]["nodeClass"] == "signal" and targets[0]["dataType"] == "uint16"
+    assert res["refCount"] == 2 and res["depth"] == 1
+
+
+def test_browse_hierarchical_leaf_and_unknown_ref():
+    svc, _, _, _ = _svc()
+    leaf = svc.browse({"ref": "u1/holding/10/int16"})
+    assert leaf["root"]["nodeClass"] == "signal" and leaf["root"]["refs"] == []
+    assert leaf["root"]["dataType"] == "int16" and leaf["refCount"] == 0
+    with pytest.raises(CommandException) as ei:
+        svc.browse({"ref": "u9/coil/0/bool"})
+    assert ei.value.code == "BAD_ARGS"
+
+
+def test_browse_hierarchical_clamps_depth_and_max_refs():
+    svc, _, _, _ = _svc()
+    res = svc.browse({"ref": "root", "depth": 99, "maxRefs": 1})
+    assert res["depth"] == 4                                   # clamped to 1..4
+    assert res["refCount"] == 1 and res["truncated"] is True   # maxRefs clamped to 1..1000, honored
+    low = svc.browse({"ref": "root", "depth": 0, "maxRefs": 0})
+    assert low["depth"] == 1 and low["refCount"] == 1          # both floors clamp to 1
+
+
+def test_browse_mode_mixing_is_bad_args():
+    svc, _, _, _ = _svc()
+    # hierarchical keys and paged keys are mutually exclusive
+    with pytest.raises(CommandException) as ei:
+        svc.browse({"ref": "root", "cursor": "0"})
+    assert ei.value.code == "BAD_ARGS"
+    with pytest.raises(CommandException) as ei:
+        svc.browse({"depth": 2, "max": 10})
+    assert ei.value.code == "BAD_ARGS"
+    # depth/maxRefs without ref are meaningless
+    with pytest.raises(CommandException) as ei:
+        svc.browse({"maxRefs": 5})
+    assert ei.value.code == "BAD_ARGS"
+
+
 def test_panels_trio():
     ps = panels()
     assert [p["id"] for p in ps] == ["overview", "signals", "diagnostics"]
@@ -179,6 +227,32 @@ def test_panels_trio():
               "sb/resume", "reconnect", "repoll"}
     for p in ps:
         assert set(p["verbs"]) <= served
+
+
+def test_panels_meet_the_renderable_descriptor_floor():
+    """The console-renderable floor: summary rows, commandSummary verbs, a signalGrid bound to
+    sb/signals (both descriptor keys) + sb/read, a hierarchical treeBrowser bound to sb/browse with
+    widget-level instance scope — and no widget advertising a writeVerb (the guarded-write console
+    flow does not exist)."""
+    by_id = {p["id"]: p for p in panels()}
+
+    widgets = {w["kind"]: w for w in by_id["overview"]["widgets"]}
+    assert [set(r) for r in widgets["summary"]["rows"]] == [{"label", "value"}] * 3
+    assert widgets["commandSummary"]["verbs"] == [
+        "sb/status", "reconnect", "sb/pause", "sb/resume", "repoll"]
+
+    grid = next(w for w in by_id["signals"]["widgets"] if w["kind"] == "signalGrid")
+    assert grid["scope"] == "instance"
+    assert grid["signalsVerb"] == "sb/signals" and grid["subscriptionsVerb"] == "sb/signals"
+    assert grid["readVerb"] == "sb/read"
+
+    tree = next(w for w in by_id["diagnostics"]["widgets"] if w["kind"] == "treeBrowser")
+    assert tree["scope"] == "instance" and tree["mode"] == "hierarchical"
+    assert tree["browseVerb"] == "sb/browse" and tree["rootRef"] == "root"
+
+    for p in by_id.values():
+        for w in p["widgets"]:
+            assert "writeVerb" not in w
 
 
 def test_signals():
@@ -236,6 +310,54 @@ def test_write_encode_failure_reported_per_entry_in_mixed_batch():
     assert by_name["RunCmd"]["ok"] is True
     assert by_name["RWInt16"]["ok"] is False and "bus error" in by_name["RWInt16"]["error"]
     assert any(e[0] == "write" and e[1] is False and e[2] == "RWInt16" for e in events.events)
+
+
+def test_write_device_rejection_counts_a_write_error():
+    # a write that passed validation + the allow-list and then failed AT THE DEVICE feeds
+    # southbound_health.writeErrors (drained on take, like readErrors)
+    svc, conn, _, _ = _svc()
+
+    def boom(*a, **k):
+        raise RuntimeError("bus error")
+    conn.write_registers = boom
+    with pytest.raises(CommandException):        # all-failed batch -> WRITE_FAILED
+        svc.write({"writes": [{"name": "RWInt16", "value": 7}]})
+    assert svc._counters.take_interval_write_errors() == 1
+
+
+def test_write_policy_refusals_do_not_count_write_errors():
+    # allow-list refusals, missing values, read-only tables, and unresolvable refs never reach the
+    # device — none of them is a southbound_health writeError
+    svc, _, _, _ = _svc(config=make_config(writes_allow=[]))
+    with pytest.raises(CommandException):        # WRITE_NOT_ALLOWED
+        svc.write({"writes": [{"name": "RWInt16", "value": 1}]})
+    assert svc._counters.take_interval_write_errors() == 0
+
+    svc2, _, _, _ = _svc()
+    res = svc2.write({"writes": [{"name": "RWInt16"},                     # missing value
+                                 {"name": "InCounter", "value": 3},      # read-only table
+                                 {"unitId": 1, "value": 5}]})            # unresolvable ref
+    assert res["written"] == 0
+    assert svc2._counters.take_interval_write_errors() == 0
+
+
+def test_write_encode_error_reported_but_not_a_write_error():
+    # an unencodable value is a caller-side validation failure — the batch still fails
+    # (WRITE_FAILED: attempted, nothing succeeded) but it never reached the device, so it is NOT
+    # a southbound_health writeError
+    svc, conn, _, _ = _svc()
+    with pytest.raises(CommandException) as ei:
+        svc.write({"writes": [{"name": "RWInt16", "value": "not-a-number"}]})
+    assert ei.value.code == "WRITE_FAILED"
+    assert conn.holding.get(10) is None                       # nothing reached the device
+    assert svc._counters.take_interval_write_errors() == 0
+
+
+def test_browse_hierarchical_ref_must_be_a_nonempty_string():
+    svc, _, _, _ = _svc()
+    with pytest.raises(CommandException) as ei:
+        svc.browse({"ref": ""})
+    assert ei.value.code == "BAD_ARGS"
 
 
 def test_read_unresolvable_ref_skipped():

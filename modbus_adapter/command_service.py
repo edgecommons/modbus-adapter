@@ -37,24 +37,57 @@ def _now_iso():
 def panels():
     """The three edge-console panel descriptors (SOUTHBOUND.md §6), each ``scope: "instance"`` with
     ``order`` 10/20/30, bound to the verbs this adapter serves. Core validates ``id``/``title``/
-    uniqueness; the widget kinds and bound verbs are console-interpreted, so they ride verbatim."""
+    uniqueness; the widget kinds and bound verbs are console-interpreted, so they ride verbatim.
+    Every command-backed widget repeats ``scope: "instance"``, which the console renderer requires.
+    No widget names a ``writeVerb``: writes stay on the command surface behind the allow-list."""
     return [
         {
             "id": "overview", "title": "Overview", "order": 10, "scope": "instance",
             "widgets": [
-                {"kind": "summary", "fields": ["connected", "paused", "endpoint"]},
-                {"kind": "commandSummary", "actions": ["reconnect", "sb/pause", "sb/resume"]},
+                {
+                    "kind": "summary", "id": "overview-summary", "title": "Adapter overview",
+                    "rows": [
+                        {"label": "Signals", "value": "Configured register map via cmd/sb/signals"},
+                        {"label": "Lifecycle", "value": "Pause, resume, reconnect, and repoll the instance"},
+                        {"label": "Writes", "value": "Allow-listed via writes.allow[]; checked before device I/O"},
+                    ],
+                },
+                {
+                    "kind": "commandSummary", "id": "overview-lifecycle", "title": "Lifecycle bindings",
+                    "verbs": ["sb/status", "reconnect", "sb/pause", "sb/resume", "repoll"],
+                },
             ],
             "verbs": ["sb/status", "reconnect", "sb/pause", "sb/resume"],
         },
         {
             "id": "signals", "title": "Signals", "order": 20, "scope": "instance",
-            "widgets": [{"kind": "signalGrid"}],
+            "widgets": [
+                {
+                    "kind": "signalGrid", "id": "configured-signals", "title": "Configured signals",
+                    "scope": "instance",
+                    "signalsVerb": "sb/signals",
+                    # Descriptor-compat hint: the shipped edge-console signalGrid reads
+                    # `subscriptionsVerb`. Point that key at the `sb/signals` verb too, so the
+                    # current console binds correctly until it reads `signalsVerb`. This is a
+                    # descriptor field alias, NOT a wire-verb alias — no `sb/subscriptions` verb
+                    # exists.
+                    "subscriptionsVerb": "sb/signals",
+                    "readVerb": "sb/read",
+                },
+            ],
             "verbs": ["sb/signals", "sb/read", "sb/write", "repoll"],
         },
         {
             "id": "diagnostics", "title": "Diagnostics", "order": 30, "scope": "instance",
-            "widgets": [{"kind": "treeBrowser"}, {"kind": "keyValueList"}],
+            "widgets": [
+                {
+                    "kind": "treeBrowser", "id": "inventory-tree", "title": "Register map",
+                    "scope": "instance", "mode": "hierarchical", "rootRef": "root",
+                    "depth": 1, "maxRefs": 200,
+                    "browseVerb": "sb/browse", "readVerb": "sb/read",
+                },
+                {"kind": "keyValueList", "id": "status-detail", "title": "Status detail"},
+            ],
             "verbs": ["sb/browse", "sb/status"],
         },
     ]
@@ -193,6 +226,10 @@ class CommandService:
             enc = codec.encode(signal.table, value, type_=signal.type, word_order=signal.word_order,
                                byte_order=signal.byte_order, scale=signal.scale, offset=signal.offset,
                                count=signal.count)
+        except Exception as e:  # noqa: BLE001 - a caller-side encode error, not a device failure
+            LOGGER.error("[%s] write to %s failed to encode: %s", self._config.id, signal.name, e)
+            return False, (str(e) or "encode error")
+        try:
             if signal.table == codec.COIL:
                 self._conn.write_coil(signal.address, enc, unit)
             else:
@@ -200,6 +237,9 @@ class CommandService:
             self._counters.increment_write()
             return True, None
         except Exception as e:  # noqa: BLE001
+            # A DEVICE-PATH failure: the entry passed validation + the allow-list and the device
+            # rejected it (or the link died) — the only failures southbound_health.writeErrors counts.
+            self._counters.increment_write_error()
             LOGGER.error("[%s] write to %s failed: %s", self._config.id, signal.name, e)
             return False, (str(e) or "write error")
 
@@ -243,14 +283,37 @@ class CommandService:
             self._record_command("sb/resume", result, t0)
 
     def browse(self, body):
-        """``sb/browse`` — a **paged** walk of the configured signal inventory. Modbus has no
-        address-space discovery (signals are declared explicitly), so browse pages the configured
-        inventory: body ``{instance?, cursor?, max?}`` → ``{id, entries:[{id, name, type}], cursor?}``.
-        ``cursor`` is an opaque offset token; it is present in the reply only while more pages
-        remain. Distinct from ``sb/signals``, which returns the whole inventory in one shot."""
+        """``sb/browse`` — a walk of the configured signal inventory, in two mutually exclusive
+        request forms. Modbus has no address-space discovery (signals are declared explicitly), so
+        both forms serve the *configured* inventory.
+
+        **Paged** (the default): body ``{instance?, cursor?, max?}`` →
+        ``{id, entries:[{id, name, type}], cursor?}``. ``cursor`` is an opaque offset token; it is
+        present in the reply only while more pages remain. Distinct from ``sb/signals``, which
+        returns the whole inventory in one shot.
+
+        **Hierarchical** (the ``treeBrowser`` panel mode, selected by the presence of ``ref``): body
+        ``{instance?, ref, depth?, maxRefs?}`` → ``{id, mode, root, refCount, depth, truncated}``.
+        ``depth``/``maxRefs`` are clamped to 1..4 / 1..1000. Mixing ``ref``/``depth``/``maxRefs``
+        with ``cursor``/``max``, or sending ``depth``/``maxRefs`` without ``ref``, is ``BAD_ARGS``."""
         t0 = time.monotonic()
         result = RESULT_ERROR
         try:
+            # The two request forms are mutually exclusive: `ref`/`depth`/`maxRefs` select the
+            # hierarchical panel mode, `cursor`/`max` the paged one — and the hierarchical-only
+            # arguments are meaningless without a `ref`.
+            hierarchical_keys = any(k in body for k in ("ref", "depth", "maxRefs"))
+            if hierarchical_keys and any(k in body for k in ("cursor", "max")):
+                raise CommandException(
+                    "BAD_ARGS",
+                    "`ref`/`depth`/`maxRefs` (hierarchical) and `cursor`/`max` (paged) are mutually exclusive")
+            if hierarchical_keys and "ref" not in body:
+                raise CommandException(
+                    "BAD_ARGS", "`depth`/`maxRefs` are hierarchical-mode arguments and require `ref`")
+            if "ref" in body:
+                out = self._browse_hierarchical(body)
+                result = RESULT_SUCCESS
+                return out
             signals = self._poller.resolved_signals()
             cursor = body.get("cursor")
             try:
@@ -274,6 +337,50 @@ class CommandService:
             return out
         finally:
             self._record_command("sb/browse", result, t0)
+
+    def _browse_hierarchical(self, body):
+        """The ``treeBrowser`` panel mode of ``sb/browse``: ``ref`` names a node in the **same**
+        configured inventory the paged mode serves. ``"root"`` is the device node, whose
+        ``contains`` refs are the inventory (bounded by ``maxRefs``); a signal id is a known leaf
+        (``"refs": []``); an unknown ref is ``BAD_ARGS``. The Modbus inventory is flat, so a deeper
+        ``depth`` finds no grandchildren — it is still validated, clamped, and echoed."""
+        ref = body.get("ref")
+        if not isinstance(ref, str) or not ref:
+            raise CommandException("BAD_ARGS", "`ref` must be a non-empty string")
+        depth = body.get("depth")
+        depth = max(1, min(4, int(depth) if isinstance(depth, int) and not isinstance(depth, bool) else 1))
+        max_refs = body.get("maxRefs")
+        max_refs = max(1, min(1000, int(max_refs)
+                              if isinstance(max_refs, int) and not isinstance(max_refs, bool) else 200))
+
+        signals = self._poller.resolved_signals()
+        if ref == "root":
+            refs = [{
+                "referenceType": "contains",
+                "target": {"nodeId": s["signalId"], "name": s["name"], "nodeClass": "signal",
+                           "dataType": (s.get("address") or {}).get("type")},
+            } for s in signals[:max_refs]]
+            return {
+                "id": self._config.id,
+                "mode": "hierarchical",
+                "root": {"nodeId": "root", "name": self._config.id, "nodeClass": "device",
+                         "dataType": None, "refs": refs},
+                "refCount": len(refs),
+                "depth": depth,
+                "truncated": len(signals) > max_refs,
+            }
+        node = next((s for s in signals if s["signalId"] == ref), None)
+        if node is None:
+            raise CommandException("BAD_ARGS", f"unknown browse ref {ref!r}")
+        return {
+            "id": self._config.id,
+            "mode": "hierarchical",
+            "root": {"nodeId": node["signalId"], "name": node["name"], "nodeClass": "signal",
+                     "dataType": (node.get("address") or {}).get("type"), "refs": []},
+            "refCount": 0,
+            "depth": depth,
+            "truncated": False,
+        }
 
     def signals(self):
         """``sb/signals`` — the configured/polled point list (so the console needs no static config)."""
@@ -303,12 +410,12 @@ class CommandService:
 
     def repoll(self):
         """``repoll`` — force an immediate poll cycle now instead of waiting for the interval.
-        Refused while the instance is paused (``BAD_ARGS``) — a paused instance publishes nothing."""
+        Refused while the instance is paused (``PAUSED``) — a paused instance publishes nothing."""
         t0 = time.monotonic()
         result = RESULT_ERROR
         try:
             if self.is_paused():
-                raise CommandException("BAD_ARGS", "instance is paused — resume before repolling")
+                raise CommandException("PAUSED", "instance is paused — resume before repolling")
             published = self._poller.poll_once()
             result = RESULT_SUCCESS
             return {"id": self._config.id, "polled": published}

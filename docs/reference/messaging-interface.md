@@ -69,7 +69,8 @@ The adapter uses the standardized southbound error-code set:
 
 | Code | Meaning |
 |------|---------|
-| `BAD_ARGS` | Malformed request — a missing `instance` on a multi-device adapter, a `repoll` while paused, or a bad `sb/browse` cursor. |
+| `BAD_ARGS` | Malformed request — a missing `instance` on a multi-device adapter, a bad `sb/browse` cursor or ref, or a browse request mixing the paged and hierarchical forms. |
+| `PAUSED` | The whole operation is prohibited while the instance is paused — `repoll` on a paused instance. |
 | `NO_SUCH_INSTANCE` | The `instance` selector names no configured device. |
 | `WRITE_NOT_ALLOWED` | Every entry of an `sb/write` batch is refused by the instance's `writes.allow` list. |
 | `WRITE_FAILED` | Every *attempted* (allow-listed) write in the batch was rejected by the device. |
@@ -157,11 +158,13 @@ Unresolvable refs are omitted (match by `signal`). A signal that errors returns 
 
 - **`sb/status`** → `result = { "id", "connected", "paused", "metrics": { "read": {interval,total}, "write": {interval,total} } }`.
 - **`sb/signals`** → `result = { "id", "signals": [ { "name", "unitId", "signalId", "address" }, ... ] }` — the whole configured/polled inventory in one shot.
-- **`sb/browse`** (body `{instance?, cursor?, max?}`) → a **paged** walk of the configured inventory (Modbus has no address-space discovery); `result = { "id", "entries": [ { "id", "name", "type" }, ... ], "cursor"? }`. `cursor` is an opaque offset token, present only while more pages remain. Distinct from `sb/signals` (single-shot, full).
+- **`sb/browse`** — a walk of the configured inventory (Modbus has no address-space discovery), in two mutually exclusive request forms:
+  - **Paged** (body `{instance?, cursor?, max?}`) → `result = { "id", "entries": [ { "id", "name", "type" }, ... ], "cursor"? }`. `cursor` is an opaque offset token, present only while more pages remain. Distinct from `sb/signals` (single-shot, full).
+  - **Hierarchical** — the `treeBrowser` panel mode, selected by the presence of `ref` (body `{instance?, ref, depth?, maxRefs?}`) → `result = { "id", "mode": "hierarchical", "root": { "nodeId", "name", "nodeClass", "dataType", "refs": [ { "referenceType": "contains", "target": {...} } ] }, "refCount", "depth", "truncated" }`. `ref: "root"` is the device node whose `contains` refs are the signal inventory (bounded by `maxRefs`); a signal id is a known leaf (`"refs": []`); an unknown ref is `BAD_ARGS`. `depth` and `maxRefs` are clamped to 1..4 and 1..1000. Mixing `ref`/`depth`/`maxRefs` with `cursor`/`max`, or sending `depth`/`maxRefs` without `ref`, is `BAD_ARGS`.
 - **`sb/pause`** (body `{instance}`) → suspends polling/publishing for the instance; confirmed + idempotent; `result = { "id", "paused": true, "changed" }`.
 - **`sb/resume`** (body `{instance}`) → resumes a paused instance; confirmed + idempotent; `result = { "id", "paused": false, "changed" }`.
 - **`reconnect`** (body `{instance}`) → drops and re-establishes the Modbus link (one bounded attempt); `result = { "id", "connected" }` or a `RECONNECT_FAILED` error.
-- **`repoll`** (body `{instance}`) → forces one immediate poll cycle; `result = { "id", "polled": <groups> }`. Refused with `BAD_ARGS` while the instance is paused.
+- **`repoll`** (body `{instance}`) → forces one immediate poll cycle; `result = { "id", "polled": <groups> }`. Refused with `PAUSED` while the instance is paused.
 
 ## Events (`evt` class)
 

@@ -34,6 +34,8 @@ Dimensions: `instance`.
 | `readErrors` | Count | Read errors observed during the reporting interval. Identifies polling failures without inspecting logs. |
 | `staleSignals` | Count | Configured signals with no successful read for longer than `component.global.healthThresholds.staleSignalSecs` (default 30). Surfaces silently-stuck signals a flat value cannot reveal. |
 | `reconnects` | Count | Link recoveries observed during the interval. Flags an unstable field network. |
+| `writeErrors` | Count | Write entries that failed on the **device path** during the interval — the entry passed validation and the `writes.allow` list and was then rejected by the device (or lost to a dead link). Policy refusals, unresolvable refs, missing values, and encode errors do not count. |
+| `signalsSubscribed` | Count | The number of signals the instance's session currently serves — the configured/polled inventory while connected (Modbus is a polling protocol with no subscriptions), `0` while disconnected. |
 
 ## `ModbusConnection`
 

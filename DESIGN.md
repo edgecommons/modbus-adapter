@@ -30,8 +30,11 @@ the addressed device by the request body's `instance` selector.
 
 - **D-M2 — standardized error codes.** `WRITE_DISABLED` → `WRITE_NOT_ALLOWED` (whole batch refused by
   the allow-list); `INSTANCE_REQUIRED` → `BAD_ARGS`; `INSTANCE_NOT_FOUND` → `NO_SUCH_INSTANCE`. Added:
-  `WRITE_FAILED` (every *attempted* allowed write was rejected by the device) and `BAD_ARGS`
-  (`repoll` while paused, a malformed `sb/browse` cursor). `RECONNECT_FAILED` is unchanged. Breaking
+  `WRITE_FAILED` (every *attempted* allowed write was rejected by the device), `BAD_ARGS` (a malformed
+  `sb/browse` cursor/ref, or mixing the paged and hierarchical browse forms), and `PAUSED` (`repoll`
+  while paused — a whole-operation refusal per the amended SOUTHBOUND §2.2; originally shipped here as
+  `BAD_ARGS`, migrated in the 2026-07 southbound conformance pass — a wire-visible code change).
+  `RECONNECT_FAILED` is unchanged. Breaking
   wire change (§2.2 standardized set); pre-1.0/experimental, so a documented break is acceptable.
   Per-entry write failures remain reported in `results[]`; only an all-failed batch raises
   `WRITE_FAILED`, preserving per-entry granularity in mixed batches.
@@ -39,32 +42,54 @@ the addressed device by the request body's `instance` selector.
 - **D-M3 — `sb/pause`/`sb/resume`.** A per-instance `PauseState` latch (`pause.py`) shared by the poll
   manager (skips polling while paused, loop stays alive), the device tick (skips the batched-publish
   flush), and the command surface. Confirmed + idempotent, reply `{paused, changed}`. `repoll` is
-  refused while paused (`BAD_ARGS`) — a paused instance publishes nothing. The paused flag is surfaced
+  refused while paused (`PAUSED`, see D-M2) — a paused instance publishes nothing. The paused flag is surfaced
   in `sb/status`. *Deviation from the template:* it is **not** added to the `state` keepalive's
   `instances[]` connectivity, because `modbus-adapter` pins `edgecommons python-lib/v0.3.0`, whose
   `InstanceConnectivity` may predate `with_state`/`with_attributes`; surfacing it there would risk an
   API-version mismatch for no contract benefit. `sb/status` is the authoritative paused surface.
 
-- **D-M4 — `southbound_health` to the exact §5 set.** `health.py` now emits `connectionState`,
-  `publishLatencyMs`, `pollLatencyMs`, `readErrors`, `staleSignals`, and the §5-optional `reconnects`.
+- **D-M4 — `southbound_health` to the exact §5 eight-measure set.** `health.py` emits
+  `connectionState`, `publishLatencyMs`, `pollLatencyMs`, `readErrors`, `staleSignals`, `reconnects`,
+  `writeErrors`, and `signalsSubscribed` (the last two added in the 2026-07 southbound conformance
+  pass, when the amended §5 fixed all eight as the set).
   Latencies are the last observed poll-cycle / publish-call durations (surfaced from the poll manager
   and publisher onto the shared `ClientMetrics`); `staleSignals` counts configured signals with no
   successful read for longer than `component.global.healthThresholds.staleSignalSecs` (default 30) —
   refreshed on every successful decode, not only on publish, so a stable value is not counted stale;
-  `reconnects` counts link recoveries observed by the device tick. The pre-existing
+  `reconnects` counts link recoveries observed by the device tick; `writeErrors` (Count, 60, drained
+  on emit like `readErrors`) counts DEVICE-PATH write failures only — the entry passed validation +
+  the allow-list and then failed at the device (`command_service._write_one` splits the encode step
+  from the device write so a caller-side encode error never counts); `signalsSubscribed` (Count, 1,
+  gauge) is the served configured/polled inventory while connected and 0 while disconnected — Modbus
+  is a polling protocol, so "subscribed" is the register map the session serves. The pre-existing
   `ModbusPublish.publishLatencyMs` / `ModbusPoll.pollDurationMs` operational measures are unchanged —
   §5 surfaces them on the canonical metric additionally.
 
-- **D-M5 — `sb/browse` as a paged configured-inventory walk.** Modbus has no address-space discovery
-  (signals are declared explicitly), so `sb/browse` pages the *configured* inventory
-  (`{cursor?, max?}` → `{entries:[{id,name,type}], cursor?}`) rather than returning `BROWSE_UNSUPPORTED`
-  — the verb answers usefully and stays distinct from `sb/signals` (single-shot full inventory). The
-  cursor is an opaque offset token.
+- **D-M5 — `sb/browse` as a configured-inventory walk, paged + hierarchical.** Modbus has no
+  address-space discovery (signals are declared explicitly), so `sb/browse` serves the *configured*
+  inventory rather than returning `BROWSE_UNSUPPORTED` — the verb answers usefully and stays distinct
+  from `sb/signals` (single-shot full inventory). Two mutually exclusive request forms over the same
+  inventory: **paged** (`{cursor?, max?}` → `{entries:[{id,name,type}], cursor?}`; the cursor is an
+  opaque offset token) and — added in the 2026-07 southbound conformance pass for the `treeBrowser`
+  panel — **hierarchical**, selected by the presence of `ref` (`{ref, depth?, maxRefs?}` →
+  `{id, mode, root:{nodeId,name,nodeClass,dataType,refs}, refCount, depth, truncated}`; `"root"` is
+  the device node whose `contains` refs are the flat signal inventory, a signal id is a known leaf,
+  an unknown ref is `BAD_ARGS`; `depth`/`maxRefs` clamp to 1..4 / 1..1000; mixing `ref`/`depth`/
+  `maxRefs` with `cursor`/`max`, or `depth`/`maxRefs` without `ref`, is `BAD_ARGS`).
 
-- **D-M6 — edge-console panel trio.** `overview`/`signals`/`diagnostics` registered via
-  `commands.register_panel` (order 10/20/30, `scope: "instance"`), each bound only to verbs this
-  adapter serves. Defined next to the command surface (`command_service.panels()`), registered in
-  `main.py`.
+- **D-M6 — edge-console panel trio, at the renderable descriptor floor.** `overview`/`signals`/
+  `diagnostics` registered via `commands.register_panel` (order 10/20/30, `scope: "instance"`), each
+  bound only to verbs this adapter serves. Defined next to the command surface
+  (`command_service.panels()`), registered in `main.py`. The widgets carry what the current console
+  renderer requires (floor raised in the 2026-07 southbound conformance pass): the overview
+  `summary` has `rows` and the `commandSummary` a `verbs` list (the pre-conformance `fields`/
+  `actions` keys are gone); the `signalGrid` names `signalsVerb` **and** `subscriptionsVerb` (both →
+  `sb/signals`; the second is a descriptor-compat alias the shipped console reads — no
+  `sb/subscriptions` wire verb exists) plus `readVerb`; the `treeBrowser` names `browseVerb`,
+  `mode: "hierarchical"`, `rootRef: "root"`, and widget-level `scope: "instance"` (repeated on every
+  command-backed widget). No widget advertises a `writeVerb` — the guarded-write console flow does
+  not exist; writes stay on the command surface behind the allow-list. The diagnostics
+  `keyValueList` widget is kept as this repo's own extra view.
 
 - **D-M7 — Greengrass recipe + kebab artifact.** The recipe previously bundled a pre-rebrand
   `greengrass_commons-*.whl` that is never produced, so a fresh GG deploy failed at install. Fixed to
