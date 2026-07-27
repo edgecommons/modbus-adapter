@@ -124,13 +124,20 @@ class PollManager:
                 read_ts = _read_timestamp()
                 stats[table]["registersRead"] += block["length"]
             except Exception as e:  # noqa: BLE001 - block read failed -> BAD for its signals
+                # Capture time (four-slot timestamp model): stamp the moment the read attempt
+                # completed -- here, failed -- so a batched flush can't drift serverTs to
+                # publish time.
+                fail_ts = _read_timestamp()
                 stats[table]["result"] = RESULT_ERROR
                 stats[table]["protocolReadErrors"] += 1
                 stats[table]["samplesBad"] += len(block["signals"])
                 raw = str(e) or "read error"
                 for signal in block["signals"]:
                     self._counters.increment_read_error()
-                    self._publisher.offer(group, signal, self._publisher.make_sample(None, Quality.BAD, raw))
+                    self._publisher.offer(
+                        group, signal,
+                        self._publisher.make_sample(None, Quality.BAD, raw, server_ts=fail_ts),
+                    )
                 stats[table]["pollDurationMs"] += (time.monotonic() - block_t0) * 1000.0
                 continue
             for signal in block["signals"]:

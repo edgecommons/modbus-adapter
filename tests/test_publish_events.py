@@ -146,6 +146,29 @@ def test_publish_value_less_sample_with_no_explicit_quality_still_defaults_to_go
     assert sample["quality"] == "GOOD" and sample["qualityRaw"] == "unspecified"
 
 
+def test_delayed_batched_flush_carries_read_time_server_ts_not_publish_time():
+    # Four-slot timestamp model (edgecommons/edgecommons#79): serverTs is the CAPTURE time --
+    # stamped at register-read completion, not at publish. With batchMs > 0 a sample can sit in
+    # the buffer for the whole batch window; simulate that latency and prove the flush still
+    # carries the read-time stamp instead of the facade's serverTs=now-at-publish default.
+    import time as _time
+    from datetime import datetime, timezone
+    pub, msg, group, signal = _pub(batch_ms=100)
+    pub.offer(group, signal, SignalUpdatePublisher.make_sample(1, server_ts=READ_TS))
+    pub.offer(group, signal,
+              SignalUpdatePublisher.make_sample(None, Quality.BAD, "timeout", server_ts=READ_TS))
+    _time.sleep(0.05)                                # simulated batching latency before the flush
+    publish_wall_clock = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    pub.flush()
+    assert len(msg.published) == 2                   # one valued message, one value-less message
+    for _, envelope in msg.published:
+        sample = envelope.body["samples"][0]
+        assert sample["serverTs"] == READ_TS                          # the read-time capture stamp
+        assert not sample["serverTs"].startswith(publish_wall_clock)  # NOT re-stamped at publish
+        decoded = _decode(envelope)
+        assert decoded.body["samples"][0]["serverTs"] == READ_TS
+
+
 def test_publish_mixed_batch_splits_valued_and_valueless_samples():
     # A batchMs window can straddle a transient failure: one tick reads fine, the next times
     # out. Since a value-less sample can't ride the same builder-constructed message as a
@@ -267,7 +290,8 @@ def test_resolved_signals_shape():
     assert "Counter16" in names and all("signalId" in s and "address" in s for s in pm.resolved_signals())
 
 
-def test_poll_once_block_read_error_marks_bad():
+def test_poll_once_block_read_error_marks_bad(monkeypatch):
+    monkeypatch.setattr("modbus_adapter.poll_manager._read_timestamp", lambda: READ_TS)
     config = make_config(signals=[{"name": "Counter16", "table": "holding", "address": 0, "type": "uint16"}])
     conn = FakeConn()
 
@@ -278,8 +302,10 @@ def test_poll_once_block_read_error_marks_bad():
     counters = ClientMetrics()
     pm = PollManager(conn, config, SignalUpdatePublisher(FakeInstance(msg).data(), config), counters)
     pm.poll_once()
-    # a failed block read publishes BAD samples for its signals
+    # a failed block read publishes BAD samples for its signals, stamped with the capture time
+    # (the moment the read attempt failed), not the publish time
     assert msg.published and msg.published[0][1].body["samples"][0]["quality"] == "BAD"
+    assert msg.published[0][1].body["samples"][0]["serverTs"] == READ_TS
 
 
 def test_start_and_stop_run_poll_threads():

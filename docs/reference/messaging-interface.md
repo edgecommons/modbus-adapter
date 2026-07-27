@@ -92,6 +92,11 @@ The `sb/read` reply's `reads[]` entries (below) always carry all five fields exp
 than emitting it `null`, and defaults an omitted `quality` to `GOOD` with `qualityRaw: "unspecified"`
 (Modbus has no native quality codes) rather than the literal string `"Good"`.
 
+Per the southbound four-slot timestamp model, `serverTs` is the capture time: the adapter stamps it
+the moment the register read completes (on the poll path and in `sb/read` replies alike), so a
+batched publish carries the read-time stamp; `sourceTs` is absent (Modbus supplies no device time),
+and `receivedTs` is not emitted (a direct-client adapter's receipt and capture coincide).
+
 ## Data plane
 
 ### `SouthboundSignalUpdate` (adapter → bus, `data` class)
