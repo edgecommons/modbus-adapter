@@ -58,10 +58,11 @@ registers / 2000 bits); `maxGap` lets it bridge small holes between signals.
 
 ## Read and write signals from a client
 
-Both go through the library **command inbox** (`ecv1/{device}/modbus-adapter/cmd/{verb}`). Set
-`header.name` to the verb, `header.reply_to` + `header.correlation_id` for the reply, and select the
-device with `instance` in the body (optional with one device). The reply is
-`{ "ok": true, "result": … }`.
+Both go through the library **command inbox** (`ecv1/{device}/modbus-adapter[/{instance}]/cmd/{verb}`).
+Set `header.name` to the verb and `header.reply_to` + `header.correlation_id` for the reply. Select
+the device either by putting its instance token in the topic (authoritative — a conflicting body
+`instance` is refused) or with `instance` in the body on the component-scope topic (optional with one
+device). The reply is `{ "ok": true, "result": … }`.
 
 **Write** (the target `signal.id` must be on the instance's `writes.allow` list — e.g.
 `"writes": { "allow": [ "u1/holding/6/float32" ] }`):

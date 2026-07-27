@@ -19,8 +19,11 @@ extraction) — Modbus has no eventing, discovery, or native quality.
 ## Layout
 
 - `main.py` — builds `EdgeCommons`, spawns one `ModbusDevice` worker thread per
-  `component.instances[]` entry, registers the `sb/*` verbs + the three panels on the shared command
-  inbox, and dispatches each request into the addressed device by its body `instance` selector.
+  `component.instances[]` entry, registers the `sb/*` verbs (via the scope-aware `register_scoped`
+  form) + the three panels on the shared command inbox, and dispatches each request into the
+  addressed device through `modbus_adapter/routing.py`.
+- `modbus_adapter/routing.py` — the SOUTHBOUND §2.2 instance routing (`resolve_instance`):
+  topic-addressed instance authoritative, body `instance` selector for component-scoped deliveries.
 - `modbus_adapter/device.py` — coordinates one instance: connection + poll manager + publisher +
   command service + health + the pause latch + a tick that flushes batched publishes and emits health.
 - `modbus_adapter/connection.py` — **the protocol seam**: the pymodbus client, connect/retry, and
@@ -61,7 +64,9 @@ extraction) — Modbus has no eventing, discovery, or native quality.
   (Modbus has no native quality).
 - **`repoll` is refused while paused** with the top-level code `PAUSED` (a whole-operation refusal,
   not a `BAD_ARGS`); `sb/pause`/`sb/resume` are confirmed + idempotent, reply `{paused, changed}`.
-- **Instance routing** (D-EIP-13): the body `instance` selector is optional iff exactly one device is
+- **Instance routing** (D-EIP-13 + SOUTHBOUND §2.2): a topic-addressed instance is authoritative — a
+  conflicting body `instance` is `BAD_ARGS`, and a topic-only address routes by the token. On a
+  component-scoped delivery the body `instance` selector is optional iff exactly one device is
   configured; otherwise a missing id is `BAD_ARGS` and an unknown id is `NO_SUCH_INSTANCE`.
 - **Standardized error codes:** `BAD_ARGS`, `PAUSED`, `NO_SUCH_INSTANCE`, `WRITE_NOT_ALLOWED`,
   `WRITE_FAILED`, `RECONNECT_FAILED`. No `WRITE_DISABLED`/`INSTANCE_REQUIRED`/`INSTANCE_NOT_FOUND`.

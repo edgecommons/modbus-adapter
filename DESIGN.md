@@ -12,8 +12,10 @@ slave's connection lifecycle is independent, so one device down does not affect 
 protocol I/O sits behind `connection.py` (the pymodbus client + live liveness); everything above it —
 poll manager, publisher, command surface, health, metrics — is written against in-memory fakes and
 unit-tested without a broker or PLC. The on-demand command surface is served through the library
-command inbox (`gg.get_commands()`), registered once on the component-scope inbox and dispatched into
-the addressed device by the request body's `instance` selector.
+command inbox (`gg.get_commands()`), registered once through the scope-aware `register_scoped` form
+(the inbox subscribes both D-U28 command scopes) and dispatched into the addressed device by
+`routing.resolve_instance` — topic-addressed instance authoritative, body `instance` selector for
+component-scoped deliveries (D-M8).
 
 ## Decision register
 
@@ -44,9 +46,11 @@ the addressed device by the request body's `instance` selector.
   flush), and the command surface. Confirmed + idempotent, reply `{paused, changed}`. `repoll` is
   refused while paused (`PAUSED`, see D-M2) — a paused instance publishes nothing. The paused flag is surfaced
   in `sb/status`. *Deviation from the template:* it is **not** added to the `state` keepalive's
-  `instances[]` connectivity, because `modbus-adapter` pins `edgecommons python-lib/v0.3.0`, whose
-  `InstanceConnectivity` may predate `with_state`/`with_attributes`; surfacing it there would risk an
-  API-version mismatch for no contract benefit. `sb/status` is the authoritative paused surface.
+  `instances[]` connectivity. Originally that was forced by the `python-lib/v0.3.0` pin (whose
+  `InstanceConnectivity` predated `with_state`/`with_attributes`); the v0.4.0 pin (D-M8) removes that
+  API constraint, but the surface is deliberately still not adopted — `sb/status` remains the
+  authoritative paused surface. Revisit if a console/fleet consumer needs pause visibility on the
+  keepalive.
 
 - **D-M4 — `southbound_health` to the exact §5 eight-measure set.** `health.py` emits
   `connectionState`, `publishLatencyMs`, `pollLatencyMs`, `readErrors`, `staleSignals`, `reconnects`,
@@ -97,6 +101,23 @@ the addressed device by the request body's `instance` selector.
   `python-protocol-adapter` template. The GG artifact is kebab-cased `ModbusAdapter.zip` →
   `modbus-adapter.zip` with matching `{artifacts:decompressedPath}/modbus-adapter/` paths; the
   Greengrass **component name** stays PascalCase reverse-DNS (`com.mbreissi.edgecommons.ModbusAdapter`).
+
+- **D-M8 — core 0.4.0 adoption: scoped instance routing (`register_scoped`).** The `edgecommons` pin
+  moves to `python-lib/v0.4.0` (tag commit `ef4c624`). All nine adapter verbs (`sb/*` +
+  `reconnect`/`repoll`) re-register through the scope-aware `register_scoped(verb, handler)` form, so
+  each handler receives the topic-addressed instance token beside the request (`None` on a
+  component-scoped delivery). Routing moves out of `main.py` into `modbus_adapter/routing.py`
+  (`resolve_instance`, unit-tested and inside the coverage gate) and enforces SOUTHBOUND §2.2:
+  the **topic-addressed instance is authoritative** — a conflicting body `instance` is `BAD_ARGS`
+  (checked before existence, so the disagreement itself is the refusal); topic-only routes by the
+  token (never falling back to the single configured device); component-scoped deliveries keep the
+  D-EIP-13 body routing (selector optional iff exactly one device; missing → `BAD_ARGS`, unknown →
+  `NO_SUCH_INSTANCE`). Other 0.4.0 enablers evaluated and **not adopted**, honestly N/A here:
+  `set_command_availability` — every one of the nine verbs is unconditionally served; write gating is
+  per-signal/per-instance (`writes.allow[]`, D-M1), which a component-wide per-verb availability
+  state cannot represent without lying for mixed-instance configs; `receivedTs` — a direct-client
+  poller's receipt and capture coincide, so `serverTs` (already stamped at read completion per the
+  four-slot model) is the whole truth and no `receivedTs` is emitted.
 
 ## Known consumers of the breaking changes (grepped, not assumed)
 
