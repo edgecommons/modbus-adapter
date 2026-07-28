@@ -122,6 +122,7 @@ def test_status():
     svc, _, _, _ = _svc()
     res = svc.status()
     assert res["connected"] is True and res["paused"] is False
+    assert res["state"] == "ONLINE"                      # the single state model (D-SC-7)
     assert "read" in res["metrics"] and "write" in res["metrics"]
 
 
@@ -132,6 +133,7 @@ def test_pause_resume_idempotent_and_status_reflects_it():
     assert p1 == {"id": "plc1", "paused": True, "changed": True}
     assert svc.pause()["changed"] is False               # idempotent
     assert svc.status()["paused"] is True and pause.is_paused() is True
+    assert svc.status()["state"] == "PAUSED"             # the keepalive reads the same token
     r1 = svc.resume()
     assert r1 == {"id": "plc1", "paused": False, "changed": True}
     assert svc.resume()["changed"] is False              # idempotent

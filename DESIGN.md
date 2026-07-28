@@ -12,10 +12,12 @@ slave's connection lifecycle is independent, so one device down does not affect 
 protocol I/O sits behind `connection.py` (the pymodbus client + live liveness); everything above it —
 poll manager, publisher, command surface, health, metrics — is written against in-memory fakes and
 unit-tested without a broker or PLC. The on-demand command surface is served through the library
-command inbox (`gg.get_commands()`), registered once through the scope-aware `register_scoped` form
-(the inbox subscribes both D-U28 command scopes) and dispatched into the addressed device by
-`routing.resolve_instance` — topic-addressed instance authoritative, body `instance` selector for
-component-scoped deliveries (D-M8).
+command inbox (`gg.get_commands()`), each verb registered once at `CommandScope.INSTANCE` (the inbox
+subscribes both D-U28 command scopes and owns the addressing) and dispatched into the addressed
+device by `routing.resolve_instance`, which applies only the two configuration-dependent policies —
+the sole configured device when none is addressed, `NO_SUCH_INSTANCE` for one that is unknown
+(D-M9). Each instance's condition comes from one state model (`instance_state.device_state`), read
+by both `sb/status` and the keepalive's `instances[]`.
 
 ## Decision register
 
@@ -44,13 +46,11 @@ component-scoped deliveries (D-M8).
 - **D-M3 — `sb/pause`/`sb/resume`.** A per-instance `PauseState` latch (`pause.py`) shared by the poll
   manager (skips polling while paused, loop stays alive), the device tick (skips the batched-publish
   flush), and the command surface. Confirmed + idempotent, reply `{paused, changed}`. `repoll` is
-  refused while paused (`PAUSED`, see D-M2) — a paused instance publishes nothing. The paused flag is surfaced
-  in `sb/status`. *Deviation from the template:* it is **not** added to the `state` keepalive's
-  `instances[]` connectivity. Originally that was forced by the `python-lib/v0.3.0` pin (whose
-  `InstanceConnectivity` predated `with_state`/`with_attributes`); the v0.4.0 pin (D-M8) removes that
-  API constraint, but the surface is deliberately still not adopted — `sb/status` remains the
-  authoritative paused surface. Revisit if a console/fleet consumer needs pause visibility on the
-  keepalive.
+  refused while paused (`PAUSED`, see D-M2) — a paused instance publishes nothing. The paused state is
+  surfaced on **both** command-surface and keepalive surfaces: `sb/status` carries `paused` plus the
+  `state` token, and the `state` keepalive's `instances[]` carries `PAUSED` for that instance while
+  its link is up (D-M9) — one state model, so a fleet view can tell a deliberately quiet slave from
+  a stale one.
 
 - **D-M4 — `southbound_health` to the exact §5 eight-measure set.** `health.py` emits
   `connectionState`, `publishLatencyMs`, `pollLatencyMs`, `readErrors`, `staleSignals`, `reconnects`,
@@ -102,12 +102,14 @@ component-scoped deliveries (D-M8).
   `modbus-adapter.zip` with matching `{artifacts:decompressedPath}/modbus-adapter/` paths; the
   Greengrass **component name** stays PascalCase reverse-DNS (`com.mbreissi.edgecommons.ModbusAdapter`).
 
-- **D-M8 — core 0.4.0 adoption: scoped instance routing (`register_scoped`).** The `edgecommons` pin
-  moves to `python-lib/v0.4.0` (tag commit `ef4c624`). All nine adapter verbs (`sb/*` +
-  `reconnect`/`repoll`) re-register through the scope-aware `register_scoped(verb, handler)` form, so
-  each handler receives the topic-addressed instance token beside the request (`None` on a
-  component-scoped delivery). Routing moves out of `main.py` into `modbus_adapter/routing.py`
-  (`resolve_instance`, unit-tested and inside the coverage gate) and enforces SOUTHBOUND §2.2:
+- **D-M8 — core 0.4.0 adoption: scoped instance routing (`register_scoped`).** *(Superseded by D-M9:
+  `register_scoped` is removed in core 0.5.0 and the topic/body/conflict logic described here now
+  lives in the library.)* The `edgecommons` pin
+  moved to `python-lib/v0.4.0` (tag commit `ef4c624`). All nine adapter verbs (`sb/*` +
+  `reconnect`/`repoll`) re-registered through the scope-aware `register_scoped(verb, handler)` form, so
+  each handler received the topic-addressed instance token beside the request (`None` on a
+  component-scoped delivery). Routing moved out of `main.py` into `modbus_adapter/routing.py`
+  (`resolve_instance`, unit-tested and inside the coverage gate) and enforced SOUTHBOUND §2.2:
   the **topic-addressed instance is authoritative** — a conflicting body `instance` is `BAD_ARGS`
   (checked before existence, so the disagreement itself is the refusal); topic-only routes by the
   token (never falling back to the single configured device); component-scoped deliveries keep the
@@ -118,6 +120,35 @@ component-scoped deliveries (D-M8).
   state cannot represent without lying for mixed-instance configs; `receivedTs` — a direct-client
   poller's receipt and capture coincide, so `serverTs` (already stamped at read completion per the
   four-slot model) is the whole truth and no `receivedTs` is emitted.
+
+- **D-M9 — core 0.5.0 adoption: declared verb scope + keepalive instance state.** The `edgecommons`
+  pin moves to `python-lib/v0.5.0` (release commit `a14a328`). Two changes ride one wave:
+
+  1. **Declared verb scope (D-SC-1..6).** `register_scoped` is gone; the two remaining forms take a
+     `CommandScope` and always deliver the addressing. All nine verbs (`sb/read`, `sb/write`,
+     `sb/status`, `sb/signals`, `sb/browse`, `sb/pause`, `sb/resume`, `reconnect`, `repoll`)
+     re-register as `commands.register(verb, CommandScope.INSTANCE, handler)` with
+     `handler(request, addressed_instance)` — every one acts on exactly one slave, so none is
+     `COMPONENT` or `BOTH`. The library now owns addressing: topic-token and body-`instance`
+     extraction, the conflict-first `BAD_ARGS`, and (for `COMPONENT` verbs, which this adapter has
+     none of) instance-addressing rejection — all before dispatch. `routing.resolve_instance` sheds
+     that logic and its `body` parameter entirely and keeps only what needs configuration knowledge
+     (D-SC-4): the optional-iff-one configured default and `NO_SUCH_INSTANCE`. No handler reads
+     `body["instance"]` any more. Wire-visible behavior is unchanged except that the conflict
+     refusal now comes from the library; `describe` additionally advertises each verb's `scope`.
+  2. **Keepalive instance state (D-SC-7).** The `state` keepalive's `instances[]` entries now carry
+     `state` — `ONLINE` / `PAUSED` / `BACKOFF` / `CONNECTING` — via `InstanceConnectivity.with_state`,
+     reversing D-M3's deviation. It comes from the **single** state model
+     `instance_state.device_state(paused, connected)`, which also answers `sb/status`'s new `state`
+     field (`ModbusDevice.state()` → `CommandService.state()`), so a pushed keepalive and a pulled
+     status can never disagree. **Link truth wins** — the fleet-wide precedence shared with the OPC UA
+     and EtherNet/IP adapters and the scaffold templates: `PAUSED` is reported only while the link is
+     up, so a paused instance whose link is down reads `BACKOFF` (and `CONNECTING` before its first
+     connect, its blocking initial connect still retrying), with the pause itself still visible in
+     `sb/status`'s `paused` field. A running device with a dead link reads `BACKOFF` either way. Additive on the wire —
+     consumers ignoring an unknown/absent `state` are unaffected. `main.py`'s provider is now a
+     one-liner over `instance_state.instance_connectivity`, so the sample builder is inside the
+     coverage gate and the published element is pinned by unit tests.
 
 ## Known consumers of the breaking changes (grepped, not assumed)
 

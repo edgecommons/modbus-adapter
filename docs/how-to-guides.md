@@ -60,9 +60,9 @@ registers / 2000 bits); `maxGap` lets it bridge small holes between signals.
 
 Both go through the library **command inbox** (`ecv1/{device}/modbus-adapter[/{instance}]/cmd/{verb}`).
 Set `header.name` to the verb and `header.reply_to` + `header.correlation_id` for the reply. Select
-the device either by putting its instance token in the topic (authoritative — a conflicting body
-`instance` is refused) or with `instance` in the body on the component-scope topic (optional with one
-device). The reply is `{ "ok": true, "result": … }`.
+the device either by putting its instance token in the topic or with `instance` in the body on the
+component-scope topic (optional with one device); naming both, differently, is refused with
+`BAD_ARGS`. The reply is `{ "ok": true, "result": … }`.
 
 **Write** (the target `signal.id` must be on the instance's `writes.allow` list — e.g.
 `"writes": { "allow": [ "u1/holding/6/float32" ] }`):
@@ -144,10 +144,11 @@ the Downward API).
   `samplesPublished`, `publishFailures`), `ModbusConnection` for link state and reconnect pressure, and
   `ModbusCommand` for control-plane request volume, latency, and errors.
 - **State keepalive:** the library publishes `ecv1/{device}/modbus-adapter/state` every ~5 s; the
-  RUNNING keepalive also carries an `instances[]` array (`{instance, connected, detail}`) — each
-  configured slave's live up/down state and endpoint.
+  RUNNING keepalive also carries an `instances[]` array (`{instance, connected, state, detail}`) —
+  each configured slave's live up/down flag, its state token (`ONLINE`/`PAUSED`/`BACKOFF`/
+  `CONNECTING`), and its endpoint.
 - **Events:** `evt/critical/connection` (link up/down per instance, a stateful alarm — raised on
   drop, cleared on restore) and `evt/{info|warning}/write` (write audit) on the `evt` class; severity
   derives the channel.
-- **Status verb:** `sb/status` → `{ connected, metrics }`. **Signals verb:** `sb/signals` → the resolved signal list with addresses.
+- **Status verb:** `sb/status` → `{ state, connected, paused, metrics }` — the same state token the keepalive publishes. **Signals verb:** `sb/signals` → the resolved signal list with addresses.
 - **Logs:** each subsystem logs under its own name with the `[<instanceId>]` prefix.

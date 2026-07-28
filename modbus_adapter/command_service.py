@@ -2,9 +2,9 @@
 status / signals / pause / resume / reconnect / repoll control verbs.
 
 These are served through the library-owned **command inbox** (the
-``gg.get_commands()`` facade) rather than per-instance topics: ``main.py`` registers the verbs
-once on the component-scope inbox (``ecv1/{device}/modbus-adapter/cmd/#``) and dispatches
-each into the right device by the request body's ``instance`` selector. Each method here returns the
+``gg.get_commands()`` facade) rather than per-instance topics: ``main.py`` registers each verb once
+at ``CommandScope.INSTANCE``, the inbox resolves the addressing, and
+``modbus_adapter.routing.resolve_instance`` picks the addressed device. Each method here returns the
 verb result object (which the inbox wraps as ``{"ok": true, "result": ...}``) or raises
 :class:`~edgecommons.command_inbox.CommandException` for a coded error reply.
 
@@ -20,6 +20,7 @@ from edgecommons.command_inbox import CommandException
 
 from . import codec
 from .config.signal_spec import SignalSpec
+from .instance_state import device_state
 from .metrics import RESULT_ERROR, RESULT_SUCCESS
 
 LOGGER = logging.getLogger("modbus_adapter.command")
@@ -248,16 +249,27 @@ class CommandService:
             return False, (str(e) or "write error")
 
     def status(self):
-        """``sb/status`` — connection state, paused flag, and read/write counters."""
+        """``sb/status`` — instance state, connection flag, paused flag, and read/write counters.
+
+        ``state`` is the single state model (D-SC-7): the very token the ``state`` keepalive's
+        ``instances[]`` carries for this instance, so the pulled answer and the pushed one can
+        never disagree."""
         t0 = time.monotonic()
         result = RESULT_ERROR
         try:
-            ret = {"id": self._config.id, "connected": self._conn.is_connected(),
+            ret = {"id": self._config.id, "state": self.state(),
+                   "connected": self._conn.is_connected(),
                    "paused": self.is_paused(), "metrics": self._counters.to_dict()}
             result = RESULT_SUCCESS
             return ret
         finally:
             self._record_command("sb/status", result, t0)
+
+    def state(self) -> str:
+        """This instance's state token (``ONLINE``/``PAUSED``/``BACKOFF``) — the one model both
+        ``sb/status`` and the keepalive's ``instances[]`` read (D-SC-7). Link truth wins: a paused
+        instance whose link is down reads ``BACKOFF``, the pause still reported in ``paused``."""
+        return device_state(self.is_paused(), self._conn.is_connected())
 
     def is_paused(self) -> bool:
         return self._pause is not None and self._pause.is_paused()

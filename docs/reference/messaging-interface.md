@@ -29,21 +29,25 @@ Request/reply carries `header.reply_to` + `header.correlation_id`; the reply is 
 
 ## Topics
 
-| Class | Message | Direction | Topic | Reply |
-|-------|---------|-----------|-------|-------|
-| `data` | `SouthboundSignalUpdate` | adapter → bus | `ecv1/{device}/modbus-adapter/{instance}/data/{signal}` | — |
-| `evt` | `evt` | adapter → bus | `ecv1/{device}/modbus-adapter/{instance}/evt/{severity}/{connection\|write}` | — |
-| `cmd` | `sb/read` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/sb/read` | `{ok,result}` |
-| `cmd` | `sb/write` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/sb/write` | `{ok,result}` |
-| `cmd` | `sb/status` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/sb/status` | `{ok,result}` |
-| `cmd` | `sb/signals` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/sb/signals` | `{ok,result}` |
-| `cmd` | `sb/browse` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/sb/browse` | `{ok,result}` |
-| `cmd` | `sb/pause` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/sb/pause` | `{ok,result}` |
-| `cmd` | `sb/resume` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/sb/resume` | `{ok,result}` |
-| `cmd` | `reconnect` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/reconnect` | `{ok,result}` |
-| `cmd` | `repoll` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/repoll` | `{ok,result}` |
-| `metric` | `southbound_health`, `ModbusConnection`, `ModbusInventory`, `ModbusPoll`, `ModbusPublish`, `ModbusCommand` | adapter → bus (auto) | `ecv1/{device}/modbus-adapter/metric/{metricName}` | — |
-| `state` | keepalive | adapter → bus (auto) | `ecv1/{device}/modbus-adapter/state` | — |
+| Class | Message | Direction | Topic | Scope | Reply |
+|-------|---------|-----------|-------|-------|-------|
+| `data` | `SouthboundSignalUpdate` | adapter → bus | `ecv1/{device}/modbus-adapter/{instance}/data/{signal}` | — | — |
+| `evt` | `evt` | adapter → bus | `ecv1/{device}/modbus-adapter/{instance}/evt/{severity}/{connection\|write}` | — | — |
+| `cmd` | `sb/read` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/sb/read` | `instance` | `{ok,result}` |
+| `cmd` | `sb/write` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/sb/write` | `instance` | `{ok,result}` |
+| `cmd` | `sb/status` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/sb/status` | `instance` | `{ok,result}` |
+| `cmd` | `sb/signals` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/sb/signals` | `instance` | `{ok,result}` |
+| `cmd` | `sb/browse` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/sb/browse` | `instance` | `{ok,result}` |
+| `cmd` | `sb/pause` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/sb/pause` | `instance` | `{ok,result}` |
+| `cmd` | `sb/resume` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/sb/resume` | `instance` | `{ok,result}` |
+| `cmd` | `reconnect` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/reconnect` | `instance` | `{ok,result}` |
+| `cmd` | `repoll` | bus → adapter | `ecv1/{device}/modbus-adapter[/{instance}]/cmd/repoll` | `instance` | `{ok,result}` |
+| `metric` | `southbound_health`, `ModbusConnection`, `ModbusInventory`, `ModbusPoll`, `ModbusPublish`, `ModbusCommand` | adapter → bus (auto) | `ecv1/{device}/modbus-adapter/metric/{metricName}` | — | — |
+| `state` | keepalive | adapter → bus (auto) | `ecv1/{device}/modbus-adapter/state` | — | — |
+
+The **Scope** column is each verb's declared command scope, the value a `describe` reply carries in
+`commands[].scope`. Every verb this adapter serves is `instance`-scoped: it acts on one configured
+slave.
 
 Fleet consumers subscribe the six UNS wildcards — telemetry is one filter,
 `ecv1/+/+/+/data/#`; events `ecv1/+/+/+/evt/#`; metrics `ecv1/+/+/+/metric/#`; state
@@ -60,15 +64,18 @@ A request's **verb** is the topic channel after the `/cmd/` marker and must equa
 Built-in verbs (`ping`, `status`, `describe`, `reload-config`, `get-configuration`) ship with every
 component; the adapter adds the `sb/*` + `reconnect`/`repoll` verbs below.
 
-The adapter routes every request to one configured device:
+Every request is addressed to one configured device. Each verb declares the `instance` scope, and
+the addressing resolves in this order:
 
-- An **instance-scoped** request (`ecv1/{device}/modbus-adapter/{instance}/cmd/…`) routes by the
-  topic's instance token, which is **authoritative**: a body `instance` that disagrees with it is
-  refused with `BAD_ARGS`; with only the topic token present, no body selector is needed.
-- A **component-scoped** request (`ecv1/{device}/modbus-adapter/cmd/…`) routes by the **`instance`**
-  field in the request body, optional when only one device is configured (missing on a multi-device
-  adapter is `BAD_ARGS`).
-- A selector that names no configured device is `NO_SUCH_INSTANCE`.
+- An **instance-scoped** request (`ecv1/{device}/modbus-adapter/{instance}/cmd/…`) addresses the
+  device named by the topic's instance token; no body selector is needed.
+- A **component-scoped** request (`ecv1/{device}/modbus-adapter/cmd/…`) addresses the device named
+  by the **`instance`** field in the request body.
+- A body `instance` that disagrees with the topic's instance token is refused with `BAD_ARGS`,
+  before the adapter runs the verb.
+- A request that names no instance at all addresses the sole configured device; on a multi-device
+  adapter it is `BAD_ARGS`.
+- An addressed instance that names no configured device is `NO_SUCH_INSTANCE`.
 
 The reply body is `{"ok": true, "result": <verb result>}` on success, or
 `{"ok": false, "error": {"code", "message"}}` on failure.
@@ -79,7 +86,7 @@ The adapter uses the standardized southbound error-code set:
 
 | Code | Meaning |
 |------|---------|
-| `BAD_ARGS` | Malformed request — a missing `instance` on a multi-device adapter, a body `instance` conflicting with the topic-addressed instance, a bad `sb/browse` cursor or ref, or a browse request mixing the paged and hierarchical forms. |
+| `BAD_ARGS` | Malformed request — no addressed instance on a multi-device adapter, a body `instance` conflicting with the topic's instance token, a bad `sb/browse` cursor or ref, or a browse request mixing the paged and hierarchical forms. |
 | `PAUSED` | The whole operation is prohibited while the instance is paused — `repoll` on a paused instance. |
 | `NO_SUCH_INSTANCE` | The `instance` selector names no configured device. |
 | `WRITE_NOT_ALLOWED` | Every entry of an `sb/write` batch is refused by the instance's `writes.allow` list. |
@@ -171,7 +178,7 @@ Unresolvable refs are omitted (match by `signal`). A signal that errors returns 
 
 ## Control plane
 
-- **`sb/status`** → `result = { "id", "connected", "paused", "metrics": { "read": {interval,total}, "write": {interval,total} } }`.
+- **`sb/status`** → `result = { "id", "state", "connected", "paused", "metrics": { "read": {interval,total}, "write": {interval,total} } }`. `state` is the instance state token (`ONLINE` / `PAUSED` / `BACKOFF` / `CONNECTING`, see [State keepalive](#state-keepalive-state-class-reserved--automatic)) — the same token the keepalive publishes for that instance, so the pulled answer and the pushed one always agree.
 - **`sb/signals`** → `result = { "id", "signals": [ { "name", "unitId", "signalId", "address" }, ... ] }` — the whole configured/polled inventory in one shot.
 - **`sb/browse`** — a walk of the configured inventory (Modbus has no address-space discovery), in two mutually exclusive request forms:
   - **Paged** (body `{instance?, cursor?, max?}`) → `result = { "id", "entries": [ { "id", "name", "type" }, ... ], "cursor"? }`. `cursor` is an opaque offset token, present only while more pages remain. Distinct from `sb/signals` (single-shot, full).
@@ -226,8 +233,9 @@ without a separate UNS instance per slave (identity, data, and lifecycle stay un
   "status": "RUNNING",
   "uptimeSecs": 3600,
   "instances": [
-    { "instance": "plc1", "connected": true,  "detail": "tcp://10.0.0.50:502 unit=1" },
-    { "instance": "plc2", "connected": false }
+    { "instance": "plc1", "connected": true,  "state": "ONLINE", "detail": "tcp://10.0.0.50:502 unit=1" },
+    { "instance": "plc2", "connected": true,  "state": "PAUSED", "detail": "tcp://10.0.0.51:502 unit=1" },
+    { "instance": "plc3", "connected": false, "state": "CONNECTING" }
   ]
 }
 ```
@@ -237,6 +245,12 @@ without a separate UNS instance per slave (identity, data, and lifecycle stay un
   `ModbusIOException`, or no response marks it down. It is *not* pymodbus's cached `client.connected`
   (which reflects intent and lags a socket that died mid-session), so a mid-session southbound loss shows
   up promptly as `connected: false` on the next keepalive.
+- `state` — the instance's condition in the shared vocabulary, the same token `sb/status` returns:
+  `ONLINE` (the slave answers reads), `PAUSED` (`sb/pause` is latched and the link is up, so the
+  instance is deliberately quiet rather than stale), `BACKOFF` (the link is down and being retried),
+  `CONNECTING` (the instance's device has not come up yet). Link truth wins: a paused instance whose
+  link is down reports `BACKOFF` — `CONNECTING` before its first connect — never `PAUSED`, and the
+  pause stays visible in `sb/status`'s `paused` field.
 - `detail` — the connection describe string (`tcp://host:port unit=N` / `rtu://COM@baud unit=N`); omitted
   before that slave's device has connected (`connected` is then `false`).
 - `instances` is present **only** on the RUNNING keepalive (the best-effort `STOPPED` shutdown state, and

@@ -1,5 +1,5 @@
 # edgecommons UNS core, pinned to the released Python library tag. Never bump this pin alone; it
 # moves together with a UNS-aware component. For local dev,
 # `pip install -e ../core/libs/python` already satisfies this.
-edgecommons @ git+https://github.com/edgecommons/edgecommons.git@python-lib/v0.4.0#subdirectory=libs/python
+edgecommons @ git+https://github.com/edgecommons/edgecommons.git@python-lib/v0.5.0#subdirectory=libs/python
 pymodbus>=3.6
