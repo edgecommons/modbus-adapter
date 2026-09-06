@@ -5,6 +5,8 @@ For concepts see [explanation.md](explanation.md); for exhaustive options see [r
 
 ---
 
+Command examples use [ec-uns-cmd](https://github.com/edgecommons/ec-uns-cmd). Set the broker, device and instance to your deployment. `--body` is a native JSON argument object; the tool encodes protobuf, subscribes before publishing, and prints the reply `result` or `error` within a deadline.
+
 ## Define a register map (signals)
 
 Modbus has no discovery — you declare every signal. Put signals in a poll group on the instance:
@@ -66,19 +68,13 @@ component-scope topic (optional with one device); naming both, differently, is r
 
 **Write** (the target `signal.id` must be on the instance's `writes.allow` list — e.g.
 `"writes": { "allow": [ "u1/holding/6/float32" ] }`):
-```
-publish   ecv1/<device>/modbus-adapter/cmd/sb/write
-          { "header": { "name": "sb/write", "reply_to": "app/r", "correlation_id": "7" },
-            "body": { "instance": "plc1", "writes": [ { "name": "Setpoint", "value": 42.5 } ] } }
-subscribe app/r   → { "ok": true, "result": { "written": 1, "results": [ … ] } }
+```bash
+ec-uns-cmd --broker localhost:1883 --device gw-01 --component modbus-adapter --instance plc1 sb/write --body '{"writes":[{"name":"Setpoint","value":42.5}]}'
 ```
 
 **Read** — request/reply:
-```
-publish   ecv1/<device>/modbus-adapter/cmd/sb/read
-          { "header": { "name": "sb/read", "reply_to": "app/r", "correlation_id": "8" },
-            "body": { "instance": "plc1", "signals": [ { "name": "Temperature" } ] } }
-subscribe app/r   → { "ok": true, "result": { "id": "plc1", "reads": [ … ] } }
+```bash
+ec-uns-cmd --broker localhost:1883 --device gw-01 --component modbus-adapter --instance plc1 sb/read --body '{"signals":[{"name":"Temperature"}]}'
 ```
 
 Address a signal by `name` (a configured signal) or explicitly by

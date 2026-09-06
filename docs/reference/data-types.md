@@ -16,7 +16,7 @@ splits the value back into registers on write. All conversion is in `modbus_adap
 
 ## Types
 
-| `type` | Registers | On-wire JSON (read) | Write input | Notes |
+| `type` | Registers | Decoded sample value (JSON projection) | Write input | Notes |
 |--------|-----------|---------------------|-------------|-------|
 | `bool` | 1 bit, or 1 register + `bit` | boolean | boolean | coil/discrete; or a single bit of a holding/input register via `bit` |
 | `int16` | 1 | number | number (int) | signed |

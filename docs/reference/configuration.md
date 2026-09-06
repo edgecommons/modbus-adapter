@@ -23,7 +23,7 @@ sibling sections (`tags`, `hierarchy`, `identity`, `topic`, `messaging`, `loggin
 | `metricEmission` | optional | Routes `southbound_health` plus the Modbus operational metric families (`ModbusConnection`, `ModbusInventory`, `ModbusPoll`, `ModbusPublish`, `ModbusCommand`) to `log`/`messaging`/`cloudwatch`/`prometheus`. `messaging` auto-routes to the UNS `metric` class. |
 | `logging`, `heartbeat` | optional | Standard edgecommons sections. |
 
-UNS topics are `ecv1/{device}/{component}/{instance}/{class}[/channel]` — built and validated by the
+UNS topics are `ecv1/{device}/{component}[/{instance}]/{class}[/channel]` — built and validated by the
 library from the identity above; there are no per-instance/per-signal topic templates.
 
 Operational metric dimensions are deliberately low-cardinality for CloudWatch: `instance`,
