@@ -7,7 +7,8 @@ and you'll have read and written a signal from a client. No hardware required.
 
 - Python 3.9+, and a local MQTT broker on `localhost:1883`
   (`docker run -d -p 1883:1883 emqx/emqx`).
-- From the repo root: `pip install -e . -r requirements-test.txt`.
+- From the repo root: `pip install -e . -r requirements-test.txt`. In this organization workspace, use `pip install -e ../core/libs/python paho-mqtt` for the matching protobuf client.
+- Install [ec-uns-cmd](https://github.com/edgecommons/ec-uns-cmd) and put it on `PATH` for commands. The Python here-documents below use a Bash-compatible shell; in PowerShell, save their contents as `.py` files and run `python <file>.py`.
 
 ## 2. Start the simulator
 
@@ -32,47 +33,65 @@ You should see it connect, coalesce the configured signals into read blocks, and
 
 ## 4. Watch values flow
 
-Subscribe to the UNS data class (any MQTT client) — one wildcard covers the whole fleet:
+Normal MQTT and Greengrass IPC messaging carries EdgeCommons protobuf bytes. Decode the data
+messages before displaying their human-readable JSON projection:
 
 ```bash
-mosquitto_sub -t 'ecv1/+/+/+/data/#' -v
+python - <<'PY'
+import json
+import paho.mqtt.client as mqtt
+from edgecommons.messaging.message import Message
+
+c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+c.on_connect = lambda c, u, f, rc, p: c.subscribe("ecv1/modbus-thing/modbus-adapter/plc1/data/#", qos=1)
+def on_message(c, u, m):
+    message = Message.from_bytes(m.payload)
+    print(m.topic, json.dumps(message.to_diagnostic_json(), indent=2))
+c.on_message = on_message
+c.connect("localhost", 1883)
+try:
+    c.loop_forever()
+except KeyboardInterrupt:
+    pass
+finally:
+    c.unsubscribe("ecv1/modbus-thing/modbus-adapter/plc1/data/#")
+    c.disconnect()
+PY
 ```
 
-You'll see `SouthboundSignalUpdate` messages on `ecv1/modbus-thing/modbus-adapter/plc1/data/{signal}`
-for the changing signals (e.g. `Counter16`, `Temp`), each with a `value`, normalized `quality`, a
-Modbus `address` (`{unitId, table, address, type}`), and the top-level `identity`. (Also try
-`ecv1/+/+/+/state` for the keepalive and `ecv1/+/+/+/metric/#` for `southbound_health` plus the
-`ModbusConnection`, `ModbusInventory`, `ModbusPoll`, `ModbusPublish`, and `ModbusCommand` operational
-metric groups.)
+Each update has `body.signal`, `body.samples`, protocol address metadata, and the publisher's
+top-level `identity`. This filter covers this simulator instance. Component keepalive and metrics
+use `ecv1/modbus-thing/modbus-adapter/state` and
+`ecv1/modbus-thing/modbus-adapter/metric/#`, without an instance segment.
 
 ## 5. Read a signal on demand
 
-Read/write go through the command inbox (`ecv1/{device}/modbus-adapter/cmd/{verb}`); set
-`header.name` to the verb and `reply_to` to a topic you subscribe. With a EdgeCommons client this is one
-`request()` call; raw MQTT:
+The instance is selected by the topic through `--instance`. The body below is a native JSON command
+argument object; `ec-uns-cmd` builds the protobuf message and prints the correlated reply's `result`.
 
+```bash
+ec-uns-cmd --broker localhost:1883 --device modbus-thing --component modbus-adapter --instance plc1 sb/read --body '{"signals":[{"name":"Scaled"}]}'
 ```
-publish ecv1/modbus-thing/modbus-adapter/cmd/sb/read
-  {"header":{"name":"sb/read","reply_to":"app/r","correlation_id":"1"},"body":{"signals":[{"name":"Scaled"}]}}
-subscribe app/r   →  { "ok": true, "result": { "reads": [ { "value": 25.0, ... } ] } }   # raw 250 × scale 0.1
-```
+
+The `reads` entries report current values and per-entry outcomes; `Scaled` applies the configured scale.
 
 ## 6. Write a signal
 
-```
-publish ecv1/modbus-thing/modbus-adapter/cmd/sb/write
-  {"header":{"name":"sb/write","reply_to":"app/r","correlation_id":"2"},
-   "body":{"writes":[{"name":"RWFloat32","value":42.5}]}}      # a writable holding/coil signal
-```
-
-Read it back to confirm. (In `config.json`, `RWFloat32` / `RWInt16` / `RWString` / `RunCmd` are
-writable scratch signals.)
-
-## 7. Prove it end-to-end
+`RWFloat32` is a writable scratch signal in the supplied simulator configuration:
 
 ```bash
-python validation/validate.py        # poll→publish, read, write round-trip, control — ALL PASS
+ec-uns-cmd --broker localhost:1883 --device modbus-thing --component modbus-adapter --instance plc1 sb/write --body '{"writes":[{"name":"RWFloat32","value":42.5}]}'
+ec-uns-cmd --broker localhost:1883 --device modbus-thing --component modbus-adapter --instance plc1 sb/read --body '{"signals":[{"name":"RWFloat32"}]}'
 ```
+
+Check the write's per-entry result and that the read returns `42.5`.
+
+## 7. Validate the result
+
+The live checks above cover polling, protobuf publication and a read/write round trip. For the local
+unit suite run `python -m pytest`. The older JSON-wire clients in `validation/` are not current
+protobuf conformance gates; see the [validation guide](../validation/README.md) for their status.
+Stop the watcher, adapter and simulator with Ctrl-C when finished.
 
 Next: the [how-to guides](how-to-guides.md) for defining your own register map, tuning rates, and
 deploying; the [reference](reference/) for every option; the [explanation](explanation.md) for the

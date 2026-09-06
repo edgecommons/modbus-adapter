@@ -14,7 +14,7 @@ subscribe-based one.
 
 ## The Unified Namespace (UNS)
 
-Addressing follows the UNS: every topic is `ecv1/{device}/{component}/{instance}/{class}[/channel]`,
+Addressing follows the UNS: every topic is `ecv1/{device}/{component}[/{instance}]/{class}[/channel]`,
 built and validated by the library — never a hand-assembled string. Telemetry rides the `data` class
 (`ecv1/{device}/modbus-adapter/{instance}/data/{signal}`); discrete events ride `evt`; the on-demand
 command surface rides the library's `cmd` inbox; and the library owns `state` (a keepalive — whose
@@ -102,10 +102,10 @@ One adapter process runs one worker per `component.instances[]` entry. Each conn
 retrying every 5s) on its own thread, so a device going offline only takes its own instance's signals to
 `BAD` — the others keep streaming. This is the fault-isolation you want when one adapter fronts a fleet.
 
-Each slave's up/down state is surfaced **per-instance** in the `main` `state` keepalive's `instances[]`
-array (`{instance, connected, detail}`, one entry per configured slave) — the component keeps a single
-UNS identity under `main` and reports each connection's health there, rather than minting a separate UNS
-instance per slave. That `connected` flag is **live liveness**: it is driven by the poll reads
+Each slave's up/down state is surfaced in the component-scope `state` keepalive's `instances[]`
+array (`{instance, connected, detail}`, one entry per configured slave). Data and events carry the
+slave's instance identity; the keepalive omits `identity.instance` and reports each connection's health there.
+That `connected` flag is **live liveness**: it is driven by the poll reads
 themselves — any response that arrives (data, or even a slave *exception* for e.g. an illegal address)
 marks the link up, while a transport/IO error, a `ModbusIOException`, or no response marks it down — not
 pymodbus's cached `client.connected`, which reflects intent and lags a socket that died mid-session. So a

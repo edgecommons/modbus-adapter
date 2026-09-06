@@ -1,7 +1,7 @@
 # Reference — Messaging Interface & CLI
 
 Every topic and message the adapter publishes or accepts, and the CLI flags. Addressing follows the
-**Unified Namespace (UNS)**: `ecv1/{device}/{component}/{instance}/{class}[/channel]`. For the
+**Unified Namespace (UNS)**: `ecv1/{device}/{component}[/{instance}]/{class}[/channel]`. For the
 data/control plane model, see [explanation.md](../explanation.md); for client recipes, the
 [how-to guides](../how-to-guides.md).
 
@@ -9,11 +9,12 @@ data/control plane model, see [explanation.md](../explanation.md); for client re
 - `{component}` — the component UNS token, `modbus-adapter`.
 - `{instance}` — a device instance id (`plc1`, …) for `data`/`evt`, and optionally on `cmd` topics
   to address a device by topic; absent on the component-scope `cmd` inbox, the `state` keepalive,
-  and `metric` (whose envelope identity carries `main`).
+  and `metric` (whose envelope identity also omits `instance`). Literal `main` is an ordinary
+  configured instance id, not a sentinel.
 
 ## Envelope
 
-All messages use the EdgeCommons JSON envelope: `{header, identity, tags, body}`.
+All messages use the EdgeCommons protobuf envelope: `{header, identity, tags, body}`.
 The library stamps the top-level **`identity`** (`{hier, path, component, instance}`) on every message
 built from config. `tags` is arbitrary business metadata.
 Request/reply carries `header.reply_to` + `header.correlation_id`; the reply is published to
@@ -49,9 +50,10 @@ The **Scope** column is each verb's declared command scope, the value a `describ
 `commands[].scope`. Every verb this adapter serves is `instance`-scoped: it acts on one configured
 slave.
 
-Fleet consumers subscribe the six UNS wildcards — telemetry is one filter,
-`ecv1/+/+/+/data/#`; events `ecv1/+/+/+/evt/#`; metrics `ecv1/+/+/+/metric/#`; state
-`ecv1/+/+/+/state`. `state`/`metric`/`cfg`/`log` are library-owned **reserved** classes — a component
+Fleet consumers need both component and instance scope for each runtime class: twelve filters for
+`state`, `cfg`, `evt`, `metric`, `data`, and `log`. For example, data uses `ecv1/+/+/data/#` and
+`ecv1/+/+/+/data/#`; state uses `ecv1/+/+/state` and `ecv1/+/+/+/state`; metrics use
+`ecv1/+/+/metric/#` and `ecv1/+/+/+/metric/#`. `state`/`metric`/`cfg`/`log` are library-owned **reserved** classes — a component
 publish to them is rejected; the adapter only ever mints `data`/`evt` topics via the `data()`/`events()`
 facades and `cmd` replies via the command inbox — never a hand-assembled topic string.
 
@@ -226,7 +228,8 @@ The library's heartbeat publishes the `state` keepalive on the reserved `state` 
 (`ecv1/{device}/modbus-adapter/state`) every ~5 s — the component never addresses that topic
 itself. The RUNNING keepalive also carries an **`instances`** array: one entry per configured slave
 (`component.instances[]`), so a fleet consumer sees every slave's up/down state under the one component
-without a separate UNS instance per slave (identity, data, and lifecycle stay under `main`).
+in the component-scope keepalive. Data and events use each slave's instance; component lifecycle
+messages omit the topic instance segment and `identity.instance`.
 
 ```jsonc
 "body": {

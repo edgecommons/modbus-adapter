@@ -17,8 +17,12 @@ OPC UA's subscribe-based model.
 
 ## Status
 
-In development. See `docs/` for the operator/integrator guide and `validation/` for the reproducible
-end-to-end test harness (a pymodbus simulator + MQTT validators).
+The implemented Python adapter supports TCP, serial RTU and RTU-over-TCP acquisition, scoped
+southbound commands and the shared health model. Registry `beta` is a maturity label, not a fresh
+validation result. The [tutorial](docs/tutorial.md) provides a protobuf-aware simulator walkthrough;
+the older JSON-wire clients in `validation/` require repair before serving as current conformance
+gates. See the [validation guide](validation/README.md). This documentation review (2026-09-06)
+did not rerun hardware, serial or deployed Greengrass tests.
 
 ## Quick start (local, against the simulator)
 

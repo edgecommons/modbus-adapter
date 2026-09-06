@@ -16,7 +16,7 @@ The adapter loads **one JSON document** from `-c/--config`. The top level may co
 `messaging`, `metricEmission`, `logging`, `heartbeat`, and (opt-in) `streaming`. Timing values resolve
 **signal/group ▸ instance `defaults` ▸ `global.defaults` ▸ built-in**.
 
-All topics follow the **Unified Namespace**: `ecv1/{device}/{component}/{instance}/{class}[/channel]`,
+All topics follow the **Unified Namespace**: `ecv1/{device}/{component}[/{instance}]/{class}[/channel]`,
 built and validated by the library from the `hierarchy`/`identity` config (there are no per-instance or
 per-signal topic templates). Telemetry rides the `data` class, events `evt`, the command surface the
 `cmd` inbox; the library owns `state`/`metric`/`cfg` automatically.
